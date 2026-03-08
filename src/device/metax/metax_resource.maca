@@ -1,0 +1,7 @@
+#include "metax_resource.hpp"
+
+namespace wginfer::device::metax {
+
+Resource::Resource(int device_id) : wginfer::device::DeviceResource(WGINFER_DEVICE_METAX, device_id) {}
+
+} // namespace wginfer::device::metax
