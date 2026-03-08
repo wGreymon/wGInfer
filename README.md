@@ -1,6 +1,6 @@
 ## Overview
 
-wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架，目标是提供统一的部署接口、更灵活的模型接入方式，以及从离线测试到在线服务的完整使用路径。当前默认支持 `CPU + NVIDIA` 双平台，`MetaX` 通过显式开关启用。
+wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架，目标是提供统一的部署接口、更灵活的模型接入方式，以及从离线测试到简单web在线服务的完整使用路径。当前默认支持 `CPU + NVIDIA` 双平台，`MetaX` 通过显式开关启用。
 
 当前仓库已经具备这些能力：
 
@@ -118,4 +118,45 @@ PYTHONPATH=python python test/ops/linear.py --device nvidia
 
 ```bash
 PYTHONPATH=python python test/ops/linear.py --device metax
+```
+
+### Inference verification
+**不推荐使用cpu验证**，目前cpu端未针对矩阵进行向量化优化，推理速度极度缓慢
+
+使用 `test_infer.py --test` 可以对比 `Torch` 与 `wGInfer` 的输出 token 是否一致：
+
+```bash
+PYTHONPATH=python python test/test_infer.py --device nvidia --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/ --test
+```
+
+如果在 `MetaX` 环境中运行，则使用：
+
+```bash
+PYTHONPATH=python python test/test_infer.py --device metax --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/ --test
+```
+
+## Web Demo
+
+先安装服务端依赖：
+
+```bash
+python -m pip install fastapi uvicorn
+```
+
+启动本地聊天服务：
+
+```bash
+PYTHONPATH=python python test/chat_server.py --device nvidia --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/
+```
+
+然后在浏览器中打开：
+
+```text
+http://127.0.0.1:8000/
+```
+
+如果需要命令行客户端访问同一个服务，也可以执行：
+
+```bash
+PYTHONPATH=python python test/chat_cli.py --url http://127.0.0.1:8000/v1/chat/completions --model wginfer-qwen2
 ```
