@@ -4,6 +4,7 @@
 
 #include "../utils.hpp"
 
+// c-style function pointer：equal to using get_device_count_api = int(*)()
 typedef int (*get_device_count_api)();
 typedef void (*set_device_api)(int);
 typedef void (*device_synchronize_api)();
@@ -33,6 +34,7 @@ struct WginferRuntimeAPI {
 };
 
 namespace wginfer::device {
+    
 const WginferRuntimeAPI *getRuntimeAPI(wginferDeviceType_t device_type);
 
 const WginferRuntimeAPI *getUnsupportedRuntimeAPI();
@@ -52,4 +54,5 @@ namespace metax {
 const WginferRuntimeAPI *getRuntimeAPI();
 }
 #endif
+
 } // namespace wginfer::device

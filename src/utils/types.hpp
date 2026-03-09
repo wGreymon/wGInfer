@@ -47,14 +47,6 @@ inline size_t dsize(wginferDataType_t dtype) {
         return sizeof(float);
     case WGINFER_DTYPE_F64:
         return sizeof(double);
-    case WGINFER_DTYPE_C16:
-        return 2; // 2 bytes complex (not standard)
-    case WGINFER_DTYPE_C32:
-        return 4; // 4 bytes complex
-    case WGINFER_DTYPE_C64:
-        return 8; // 8 bytes complex
-    case WGINFER_DTYPE_C128:
-        return 16; // 16 bytes complex
     case WGINFER_DTYPE_INVALID:
     default:
         throw std::invalid_argument("Unsupported or invalid data type.");
@@ -93,14 +85,6 @@ inline const char *dtype_to_str(wginferDataType_t dtype) {
         return "float32";
     case WGINFER_DTYPE_F64:
         return "float64";
-    case WGINFER_DTYPE_C16:
-        return "complex16";
-    case WGINFER_DTYPE_C32:
-        return "complex32";
-    case WGINFER_DTYPE_C64:
-        return "complex64";
-    case WGINFER_DTYPE_C128:
-        return "complex128";
     case WGINFER_DTYPE_INVALID:
     default:
         throw std::invalid_argument("Unsupported or invalid data type.");

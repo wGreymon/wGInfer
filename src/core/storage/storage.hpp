@@ -6,6 +6,7 @@
 #include <memory>
 
 namespace wginfer::core {
+
 class Storage {
 private:
     std::byte *_memory;

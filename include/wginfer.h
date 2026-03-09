@@ -45,11 +45,7 @@ typedef enum {
     WGINFER_DTYPE_F16 = 12,
     WGINFER_DTYPE_F32 = 13,
     WGINFER_DTYPE_F64 = 14,
-    WGINFER_DTYPE_C16 = 15,
-    WGINFER_DTYPE_C32 = 16,
-    WGINFER_DTYPE_C64 = 17,
-    WGINFER_DTYPE_C128 = 18,
-    WGINFER_DTYPE_BF16 = 19,
+    WGINFER_DTYPE_BF16 = 15,
 } wginferDataType_t;
 
 // Runtime Types

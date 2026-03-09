@@ -5,6 +5,7 @@
 #include "../storage/storage.hpp"
 
 namespace wginfer::core {
+    
 class MemoryAllocator {
 protected:
     const WginferRuntimeAPI *_api;

@@ -1,8 +1,8 @@
 #pragma once
 #include <memory>
 
-namespace wginfer {
-namespace core {
+namespace wginfer::core {
+
 class Storage;
 using storage_t = std::shared_ptr<Storage>;
 
@@ -13,6 +13,5 @@ class Context;
 
 // Global function to get thread local context
 Context &context();
-} // namespace core
 
-} // namespace wginfer
+} // namespace wginfer::core

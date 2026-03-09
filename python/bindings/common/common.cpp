@@ -33,10 +33,6 @@ void bind_enums(py::module_ &m) {
         .value("F16", WGINFER_DTYPE_F16)
         .value("F32", WGINFER_DTYPE_F32)
         .value("F64", WGINFER_DTYPE_F64)
-        .value("C16", WGINFER_DTYPE_C16)
-        .value("C32", WGINFER_DTYPE_C32)
-        .value("C64", WGINFER_DTYPE_C64)
-        .value("C128", WGINFER_DTYPE_C128)
         .value("BF16", WGINFER_DTYPE_BF16);
 
     py::enum_<wginferMemcpyKind_t>(m, "MemcpyKind")

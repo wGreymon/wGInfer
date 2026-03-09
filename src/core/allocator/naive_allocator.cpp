@@ -3,6 +3,7 @@
 #include "../runtime/runtime.hpp"
 
 namespace wginfer::core::allocators {
+
 NaiveAllocator::NaiveAllocator(const WginferRuntimeAPI *runtime_api) : MemoryAllocator(runtime_api) {
 }
 
@@ -13,4 +14,5 @@ std::byte *NaiveAllocator::allocate(size_t size) {
 void NaiveAllocator::release(std::byte *memory) {
     _api->free_device(memory);
 }
+
 } // namespace wginfer::core::allocators

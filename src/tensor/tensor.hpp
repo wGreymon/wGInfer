@@ -2,14 +2,16 @@
 #include "../core/wginfer_core.hpp"
 
 #include <vector>
+
 namespace wginfer {
+
 class Tensor;
 using tensor_t = std::shared_ptr<Tensor>;
 
 struct TensorMeta {
     wginferDataType_t dtype;
     std::vector<size_t> shape;
-    std::vector<ptrdiff_t> strides;   // 以元素为单位，计算每个维度上元素的偏移量
+    std::vector<ptrdiff_t> strides; // 以元素为单位，计算每个维度上元素的偏移量
 };
 
 // 逻辑上组织张量：shape、strides、offset
@@ -18,7 +20,7 @@ class Tensor {
 private:
     TensorMeta _meta;
     core::storage_t _storage;
-    size_t _offset;  //以字节为单位，记录该张量在storage中的起始位置(一个storage存储不同的张量)
+    size_t _offset; // 以字节为单位，记录该张量在storage中的起始位置(一个storage存储不同的张量)
     Tensor(TensorMeta meta, core::storage_t storage, size_t offset = 0);
 
 public:
@@ -27,7 +29,9 @@ public:
         wginferDataType_t dtype,
         wginferDeviceType_t device_type = WGINFER_DEVICE_CPU,
         int device = 0);
+
     ~Tensor() = default;
+    
     // Info
     std::byte *data();
     const std::byte *data() const;

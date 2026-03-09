@@ -3,6 +3,7 @@
 #include "../runtime/runtime.hpp"
 
 namespace wginfer::core {
+    
 Storage::Storage(std::byte *memory, size_t size, Runtime &runtime, bool is_host)
     : _memory(memory), _size(size), _runtime(runtime), _is_host(is_host) {}
 
@@ -37,4 +38,5 @@ int Storage::deviceId() const {
 bool Storage::isHost() const {
     return _is_host;
 }
+
 } // namespace wginfer::core

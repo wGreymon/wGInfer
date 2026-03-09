@@ -64,14 +64,15 @@ static const WginferRuntimeAPI NOOP_RUNTIME_API = {
     &mallocHost,
     &freeHost,
     &memcpySync,
-    &memcpyAsync};
+    &memcpyAsync
+};
 
 const WginferRuntimeAPI *getUnsupportedRuntimeAPI() {
     return &NOOP_RUNTIME_API;
 }
 
+// Public entry point used by external callers (for example, when Context creates a Runtime).
 const WginferRuntimeAPI *getRuntimeAPI(wginferDeviceType_t device_type) {
-    // Implement for all device types
     switch (device_type) {
     case WGINFER_DEVICE_CPU:
         return wginfer::device::cpu::getRuntimeAPI();

@@ -19,7 +19,6 @@ Context::Context() {
         int device_count = api_->get_device_count();
         std::vector<Runtime *> runtimes_(device_count);
         for (int device_id = 0; device_id < device_count; device_id++) {
-
             if (_current_runtime == nullptr) {
                 auto runtime = new Runtime(device_type, device_id);
                 runtime->_activate();
@@ -49,6 +48,7 @@ Context::~Context() {
     _runtime_map.clear();
 }
 
+// runtime由context管理、创建
 void Context::setDevice(wginferDeviceType_t device_type, int device_id) {
     // If doest not match the current runtime.
     if (_current_runtime == nullptr || _current_runtime->deviceType() != device_type || _current_runtime->deviceId() != device_id) {

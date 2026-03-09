@@ -4,6 +4,7 @@
 #include "../allocator/naive_allocator.hpp"
 
 namespace wginfer::core {
+
 Runtime::Runtime(wginferDeviceType_t device_type, int device_id)
     : _device_type(device_type), _device_id(device_id), _is_active(false) {
     _api = wginfer::device::getRuntimeAPI(_device_type);
@@ -46,6 +47,7 @@ const WginferRuntimeAPI *Runtime::api() const {
     return _api;
 }
 
+// 存储实例Storage在runtime中创建
 storage_t Runtime::allocateDeviceStorage(size_t size) {
     return std::shared_ptr<Storage>(new Storage(_allocator->allocate(size), size, *this, false));
 }

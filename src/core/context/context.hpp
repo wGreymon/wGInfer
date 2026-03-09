@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace wginfer::core {
+
 class Context {
 private:
     std::unordered_map<wginferDeviceType_t, std::vector<Runtime *>> _runtime_map;
@@ -30,6 +31,8 @@ public:
     void setDevice(wginferDeviceType_t device_type, int device_id);
     Runtime &runtime();
 
+    // thread-private
     friend Context &context();
 };
+
 } // namespace wginfer::core

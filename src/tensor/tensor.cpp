@@ -27,11 +27,14 @@ tensor_t Tensor::create(const std::vector<size_t> &shape,
         strides[ndim_ - i] = stride;
         stride *= shape[ndim_ - i];
     }
+
     TensorMeta meta{dtype, shape, strides};
     size_t total_elems = stride;
     size_t dtype_size = utils::dsize(dtype);
 
-    // 针对cpu的性能优化：runtime是cuda，但需要cpu内存，直接创建，而不需要将runtime切换到cpu再分配内存
+    // 针对cpu的性能优化：
+    // 如果需要创建CPU上的tensor，但是当前的runtime是GPU，不需要切换到CPU_runtime，
+    // 因为GPU_API也提供hostMalloc
     if (device_type == WGINFER_DEVICE_CPU && core::context().runtime().deviceType() != WGINFER_DEVICE_CPU) {
         auto storage = core::context().runtime().allocateHostStorage(total_elems * dtype_size);
         return std::shared_ptr<Tensor>(new Tensor(meta, storage));
@@ -173,11 +176,11 @@ void Tensor::debug() const {
 // 判断公式：stride[i] = stride[i+1] * shape[i+1]
 bool Tensor::isContiguous() const {
     const auto& tensor_shape = shape();
-    const auto& tensor_strides =strides();
+    const auto& tensor_strides = strides();
     const size_t& tensor_ndim = ndim();
 
     // 标量总是连续的
-    if (tensor_ndim == 0 || tensor_ndim == 1) {
+    if (tensor_ndim == 0) {
         return true;
     }
 
@@ -200,6 +203,7 @@ bool Tensor::isContiguous() const {
 }
 
 // 重排序列维度：不复制数据，需要调整shape和strides
+// 即重排列shape，按照相同的顺序重排strides，storage和offset原样复用
 tensor_t Tensor::permute(const std::vector<size_t> &order) const {
     CHECK_ARGUMENT(order.size() == ndim(), "order size != tensor ndim");
 
@@ -254,9 +258,11 @@ tensor_t Tensor::view(const std::vector<size_t> &shape) const {
     return nullptr;
 }
 
-// 切片：不复制数据只调整shape和offset，在底层和原本张量共享数据
+// 切片：返回原数组的某个部分
+// 不复制数据只调整shape和offset，在底层和原本张量共享数据
 // stride不变，因为底层内存的位置并没有改动
 // 张量在内存中布局的关键：offset(起始位置)、shape(每个维度的范围)、strides(如何遍历：遍历到不同维度的步长)
+// offset是字节单位，strides是元素单位(个数)
 tensor_t Tensor::slice(size_t dim, size_t start, size_t end) const {
     // 1. 边界检查
     CHECK_ARGUMENT(dim < ndim(), "dim out of range");
@@ -275,22 +281,19 @@ tensor_t Tensor::slice(size_t dim, size_t start, size_t end) const {
 }
 
 void Tensor::load(const void *src_) {
-    // 设置当前张量所在的设备上下文
-    core::context().setDevice(this->deviceType(), this->deviceId());
+    CHECK_ARGUMENT(src_ != nullptr, "src must not be null");
+    CHECK_ARGUMENT(isContiguous(), "load only supports contiguous tensors");
 
-    // 获取运行时API
+    core::context().setDevice(this->deviceType(), this->deviceId());
     const WginferRuntimeAPI *api = core::context().runtime().api();
 
-    // 计算需要拷贝的字节数：元素个数 × 每个元素的字节数
     size_t size_bytes = this->numel() * this->elementSize();
+    wginferMemcpyKind_t kind =
+        (this->deviceType() == WGINFER_DEVICE_CPU) ? WGINFER_MEMCPY_H2H : WGINFER_MEMCPY_H2D;
 
-    // 执行从主机到设备的内存拷贝
-    // dst: 张量的设备内存地址 (this->data())
-    // src: 主机内存地址 (src_)
-    // size: 要拷贝的字节数
-    // kind: H2D (Host to Device)
-    api->memcpy_sync(this->data(), src_, size_bytes, WGINFER_MEMCPY_H2D);
+    api->memcpy_sync(this->data(), src_, size_bytes, kind);
 }
+
 
 tensor_t Tensor::contiguous() const {
     TO_BE_IMPLEMENTED();
