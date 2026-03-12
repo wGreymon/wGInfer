@@ -229,7 +229,7 @@ tensor_t Tensor::permute(const std::vector<size_t> &order) const {
 // view:改变张量的形状，不复制数据
 // offset不变，根据新的shape计算新的strides
 // 连续型数据张量：直接重塑meta即可
-// 非连续：还没想明白
+// TODO: 非连续情况
 tensor_t Tensor::view(const std::vector<size_t> &shape) const {
     // 检查元素总数
     size_t new_numel = 1;

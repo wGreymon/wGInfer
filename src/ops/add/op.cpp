@@ -12,6 +12,7 @@
 #endif
 
 namespace wginfer::ops {
+
 void add(tensor_t c, tensor_t a, tensor_t b) {
     CHECK_SAME_DEVICE(c, a, b);
     // Only support contiguous inputs with same shape for now.
@@ -41,4 +42,5 @@ void add(tensor_t c, tensor_t a, tensor_t b) {
         EXCEPTION_UNSUPPORTED_DEVICE;
     }
 }
+
 } // namespace wginfer::ops

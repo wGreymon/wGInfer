@@ -50,7 +50,7 @@ __global__ void rope_kernel(T *out,
                             size_t nhead,
                             size_t head_dim,
                             float theta) {
-    const size_t bid = static_cast<size_t>(blockIdx.x);
+    const size_t bid = blockIdx.x;
     if (bid >= seqlen * nhead) {
         return;
     }
@@ -61,7 +61,7 @@ __global__ void rope_kernel(T *out,
     const size_t offset = (seqlen_idx * nhead + head_id) * head_dim;
     const float pos_val = static_cast<float>(pos_ids[seqlen_idx]);
 
-    for (size_t j = static_cast<size_t>(threadIdx.x); j < half; j += static_cast<size_t>(blockDim.x)) {
+    for (size_t j = threadIdx.x; j < half; j += blockDim.x) {
         const float exponent = (2.0f * static_cast<float>(j)) / static_cast<float>(head_dim);
         const float phi = pos_val / powf(theta, exponent);
         const float sinv = sinf(phi);
@@ -132,4 +132,3 @@ void rope(std::byte *out,
 }
 
 } // namespace wginfer::ops::metax
-

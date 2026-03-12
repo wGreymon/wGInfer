@@ -56,7 +56,7 @@ __global__ void argmax_kernel(int64_t *max_idx, T *max_val, const T *vals, size_
     float local_max = -INFINITY;
     int64_t local_idx = -1;
 
-    for (size_t i = static_cast<size_t>(tid); i < numel; i += static_cast<size_t>(BLOCK_SIZE)) {
+    for (size_t i = tid; i < numel; i += BLOCK_SIZE) {
         const float cur = to_float<T>(vals[i]);
         if (cur > local_max || (cur == local_max && (local_idx < 0 || static_cast<int64_t>(i) < local_idx))) {
             local_max = cur;

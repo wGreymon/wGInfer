@@ -54,9 +54,9 @@ __device__ __forceinline__ __maca_bfloat16 from_float<__maca_bfloat16>(float v) 
 
 template <typename T>
 __global__ void add_bias_rowwise_kernel(T *out, const T *bias, size_t M, size_t N) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     const size_t total = M * N;
-    for (size_t i = idx; i < total; i += static_cast<size_t>(blockDim.x) * gridDim.x) {
+    for (size_t i = idx; i < total; i += blockDim.x * gridDim.x) {
         const size_t col = i % N;
         out[i] = from_float<T>(to_float(out[i]) + to_float(bias[col]));
     }
@@ -447,7 +447,7 @@ __global__ void sgemm_v4(T *out,
             const int global_r = by * BM + r;
             const int global_c = k0 + c;
             in_shared[r][c] = (global_r < static_cast<int>(M) && global_c < static_cast<int>(K))
-                                  ? to_float(in[static_cast<size_t>(global_r) * K + static_cast<size_t>(global_c)])
+                                  ? to_float(in[global_r * K + global_c])
                                   : 0.0f;
         }
 
@@ -458,7 +458,7 @@ __global__ void sgemm_v4(T *out,
             const int global_c = k0 + c;
             weight_shared[r][c] =
                 (global_r < static_cast<int>(N) && global_c < static_cast<int>(K))
-                    ? to_float(weight[static_cast<size_t>(global_r) * K + static_cast<size_t>(global_c)])
+                    ? to_float(weight[global_r * K + global_c])
                     : 0.0f;
         }
 
@@ -492,7 +492,7 @@ __global__ void sgemm_v4(T *out,
                 if (bias != nullptr) {
                     v += to_float(bias[col]);
                 }
-                out[static_cast<size_t>(row) * N + static_cast<size_t>(col)] = from_float<T>(v);
+                out[row * N + col] = from_float<T>(v);
             }
         }
     }

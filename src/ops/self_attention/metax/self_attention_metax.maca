@@ -64,7 +64,7 @@ __global__ void self_attention_online_kernel(T *__restrict__ out,
                                              size_t dv,
                                              size_t total_len,
                                              float scale) {
-    const size_t block_id = static_cast<size_t>(blockIdx.x);
+    const size_t block_id = blockIdx.x;
     if (block_id >= seqlen * nhead) {
         return;
     }
@@ -79,7 +79,7 @@ __global__ void self_attention_online_kernel(T *__restrict__ out,
     const ptrdiff_t diag = static_cast<ptrdiff_t>(total_len) - static_cast<ptrdiff_t>(seqlen);
     const ptrdiff_t max_visible_key = static_cast<ptrdiff_t>(qi) + diag;
     if (max_visible_key < 0) {
-        for (size_t m = static_cast<size_t>(threadIdx.x); m < dv; m += BLOCK_SIZE) {
+        for (size_t m = threadIdx.x; m < dv; m += BLOCK_SIZE) {
             out_row[m] = from_float_t<T>(0.0f);
         }
         return;
@@ -93,7 +93,7 @@ __global__ void self_attention_online_kernel(T *__restrict__ out,
     float *q_cache = smem;
     float *score_ptr = q_cache + d;
 
-    for (size_t kd = static_cast<size_t>(threadIdx.x); kd < d; kd += BLOCK_SIZE) {
+    for (size_t kd = threadIdx.x; kd < d; kd += BLOCK_SIZE) {
         q_cache[kd] = to_float_t(q_row[kd]);
     }
     __syncthreads();
@@ -101,7 +101,7 @@ __global__ void self_attention_online_kernel(T *__restrict__ out,
     int local_idx[MAX_LOCAL_OUT];
     double local_acc[MAX_LOCAL_OUT];
     int local_n = 0;
-    for (size_t m = static_cast<size_t>(threadIdx.x); m < dv && local_n < MAX_LOCAL_OUT; m += BLOCK_SIZE) {
+    for (size_t m = threadIdx.x; m < dv && local_n < MAX_LOCAL_OUT; m += BLOCK_SIZE) {
         local_idx[local_n] = static_cast<int>(m);
         local_acc[local_n] = 0.0;
         ++local_n;
@@ -114,7 +114,7 @@ __global__ void self_attention_online_kernel(T *__restrict__ out,
         if (threadIdx.x < METAX_WARP_SIZE) {
             const T *k_row = k + (j * nkvhead + kv_head) * d;
             float dot = 0.0f;
-            for (size_t kd = static_cast<size_t>(threadIdx.x); kd < d; kd += METAX_WARP_SIZE) {
+            for (size_t kd = threadIdx.x; kd < d; kd += METAX_WARP_SIZE) {
                 dot += q_cache[kd] * to_float_t(k_row[kd]);
             }
             dot = warp_sum(dot);
@@ -151,7 +151,7 @@ __global__ void self_attention_online_kernel(T *__restrict__ out,
     }
 
     // Rare fallback for very large dv.
-    for (size_t m = static_cast<size_t>(threadIdx.x) + static_cast<size_t>(BLOCK_SIZE * MAX_LOCAL_OUT);
+    for (size_t m = threadIdx.x + BLOCK_SIZE * MAX_LOCAL_OUT;
          m < dv;
          m += BLOCK_SIZE) {
         double acc = 0.0;

@@ -9,16 +9,14 @@
 namespace {
 
 __global__ void add_f32_kernel(float *c, const float *a, const float *b, size_t n) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * static_cast<size_t>(blockDim.x) +
-                       static_cast<size_t>(threadIdx.x);
+    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         c[idx] = a[idx] + b[idx];
     }
 }
 
 __global__ void add_f16_kernel(__half *c, const __half *a, const __half *b, size_t n) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * static_cast<size_t>(blockDim.x) +
-                       static_cast<size_t>(threadIdx.x);
+    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         c[idx] = __hadd(a[idx], b[idx]);
     }
@@ -28,8 +26,7 @@ __global__ void add_bf16_kernel(__maca_bfloat16 *c,
                                 const __maca_bfloat16 *a,
                                 const __maca_bfloat16 *b,
                                 size_t n) {
-    const size_t idx = static_cast<size_t>(blockIdx.x) * static_cast<size_t>(blockDim.x) +
-                       static_cast<size_t>(threadIdx.x);
+    const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         c[idx] = __hadd(a[idx], b[idx]);
     }
