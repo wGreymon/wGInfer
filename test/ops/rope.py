@@ -3,9 +3,9 @@ import os
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-import wginfer
 import torch
 from test_utils import arrange_tensor, random_tensor, check_equal, benchmark
+from wginfer.core import Ops
 
 
 def torch_rope(y: torch.Tensor, x: torch.Tensor, pos_ids: torch.Tensor, theta: float):
@@ -47,14 +47,14 @@ def test_op_rope(
     theta = 10000.0
     y, y_ = random_tensor(shape, dtype_name, device_name)
     torch_rope(y, x, pos_ids, theta)
-    wginfer.Ops.rope(y_, x_, pos_ids_, theta)
+    Ops.rope(y_, x_, pos_ids_, theta)
 
     assert check_equal(y_, y, atol=atol, rtol=rtol)
 
     if profile:
         benchmark(
             lambda: torch_rope(y, x, pos_ids, theta),
-            lambda: wginfer.Ops.rope(y_, x_, pos_ids_, theta),
+            lambda: Ops.rope(y_, x_, pos_ids_, theta),
             device_name,
         )
 

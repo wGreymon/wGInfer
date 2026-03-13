@@ -3,9 +3,9 @@ import os
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-import wginfer
 import torch
 from test_utils import random_tensor, check_equal, benchmark
+from wginfer.core import Ops
 
 
 def torch_linear(out, x, w, bias):
@@ -33,14 +33,14 @@ def test_op_linear(
 
     out, out_ = random_tensor(out_shape, dtype_name, device_name)
     torch_linear(out, x, w, bias)
-    wginfer.Ops.linear(out_, x_, w_, bias_)
+    Ops.linear(out_, x_, w_, bias_)
 
     assert check_equal(out_, out, atol=atol, rtol=rtol)
 
     if profile:
         benchmark(
             lambda: torch_linear(out, x, w, bias),
-            lambda: wginfer.Ops.linear(out_, x_, w_, bias_),
+            lambda: Ops.linear(out_, x_, w_, bias_),
             device_name,
         )
 

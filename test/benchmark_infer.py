@@ -11,6 +11,7 @@ import wginfer
 import torch
 from huggingface_hub import snapshot_download
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from wginfer.core import RuntimeAPI
 
 from test_utils import wginfer_device, torch_device
 
@@ -69,7 +70,7 @@ def sync_torch(device_name):
 
 
 def sync_wginfer(device_name):
-    wginfer.RuntimeAPI(wginfer_device(device_name)).device_synchronize()
+    RuntimeAPI(wginfer_device(device_name)).device_synchronize()
 
 
 def build_input_ids(tokenizer, prompt):

@@ -327,7 +327,7 @@ void Model::forward_layer(size_t layer_idx, tensor_t &x, size_t seqlen, size_t t
     x = _x_mlp;
 }
 
-// 送入一批token_ids, 输出每个位置对整个词表的logits
+// 送入一批 token_ids, 输出每个位置对整个词表的logits
 tensor_t Model::forward(tensor_t input_ids, size_t seqlen, size_t total_len) {
     // 设置设备上下文
     wginfer::core::context().setDevice(_device_type, _device_id);

@@ -1,4 +1,4 @@
-#include "common/common.hpp"
+#include "core.hpp"
 
 #include <pybind11/stl.h>
 
@@ -136,7 +136,7 @@ void bind_ops(py::module_ &m) {
 
 } // namespace
 
-void bind_common(py::module_ &m) {
+void bind_core(py::module_ &m) {
     bind_enums(m);
     bind_runtime(m);
     bind_tensor(m);

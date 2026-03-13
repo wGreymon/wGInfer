@@ -3,9 +3,9 @@ import os
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-import wginfer
 import torch
 from test_utils import random_tensor, check_equal, benchmark
+from wginfer.core import Ops
 
 
 def torch_self_attention(attn_val, query, key, value, scale):
@@ -50,13 +50,13 @@ def test_op_self_attention(
 
     attn_val, attn_val_ = random_tensor((qlen, nh, hd), dtype_name, device_name)
     torch_self_attention(attn_val, q, k, v, scale)
-    wginfer.Ops.self_attention(attn_val_, q_, k_, v_, scale)
+    Ops.self_attention(attn_val_, q_, k_, v_, scale)
     assert check_equal(attn_val_, attn_val, atol=atol, rtol=rtol)
 
     if profile:
         benchmark(
             lambda: torch_self_attention(attn_val, q, k, v, scale),
-            lambda: wginfer.Ops.self_attention(attn_val_, q_, k_, v_, scale),
+            lambda: Ops.self_attention(attn_val_, q_, k_, v_, scale),
             device_name,
         )
 

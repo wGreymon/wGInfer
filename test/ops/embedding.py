@@ -3,8 +3,8 @@ import os
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-import wginfer
 from test_utils import random_int_tensor, random_tensor, check_equal, benchmark
+from wginfer.core import Ops
 
 
 def torch_embedding(out, idx, embd):
@@ -23,14 +23,14 @@ def test_op_embedding(
     idx, idx_ = random_int_tensor(idx_shape, device_name, high=embd_shape[0])
     out, out_ = random_tensor((idx_shape[0], embd_shape[1]), dtype_name, device_name)
     torch_embedding(out, idx, embd)
-    wginfer.Ops.embedding(out_, idx_, embd_)
+    Ops.embedding(out_, idx_, embd_)
 
     check_equal(out_, out, strict=True)
 
     if profile:
         benchmark(
             lambda: torch_embedding(out, idx, embd),
-            lambda: wginfer.Ops.embedding(out_, idx_, embd_),
+            lambda: Ops.embedding(out_, idx_, embd_),
             device_name,
         )
 

@@ -1,5 +1,5 @@
 #include "bindings.hpp"
-#include "common/common.hpp"
+#include "../core/core.hpp"
 
 #include <pybind11/stl.h>
 

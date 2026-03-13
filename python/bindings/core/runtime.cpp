@@ -1,4 +1,4 @@
-#include "common/common.hpp"
+#include "core.hpp"
 
 namespace wginfer::pybind {
 

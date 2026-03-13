@@ -1,12 +1,13 @@
-import wginfer
 import torch
 from test_utils import *
+from wginfer.core import MemcpyKind
+from wginfer.core import RuntimeAPI
 import argparse
 
 
 def test_basic_runtime_api(device_name: str = "cpu"):
 
-    api = wginfer.RuntimeAPI(wginfer_device(device_name))
+    api = RuntimeAPI(wginfer_device(device_name))
 
     ndev = api.get_device_count()
     print(f"Found {ndev} {device_name} devices")
@@ -33,21 +34,21 @@ def test_memcpy(api, size_bytes: int):
         device_a,
         a.data_ptr(),
         size_bytes,
-        wginfer.MemcpyKind.H2D,
+        MemcpyKind.H2D,
     )
     # device_a -> device_b
     api.memcpy_sync(
         device_b,
         device_a,
         size_bytes,
-        wginfer.MemcpyKind.D2D,
+        MemcpyKind.D2D,
     )
     # device_b -> b
     api.memcpy_sync(
         b.data_ptr(),
         device_b,
         size_bytes,
-        wginfer.MemcpyKind.D2H,
+        MemcpyKind.D2H,
     )
 
     torch.testing.assert_close(a, b)

@@ -3,9 +3,9 @@ import os
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-import wginfer
 import torch
 from test_utils import random_tensor, check_equal, benchmark
+from wginfer.core import Ops
 
 
 def torch_rms_norm(ans, x, w, eps):
@@ -32,14 +32,14 @@ def test_op_rms_norm(
 
     c, c_ = random_tensor(shape, dtype_name, device_name)
     torch_rms_norm(c, x, w, eps)
-    wginfer.Ops.rms_norm(c_, x_, w_, eps)
+    Ops.rms_norm(c_, x_, w_, eps)
 
     assert check_equal(c_, c, atol=atol, rtol=rtol)
 
     if profile:
         benchmark(
             lambda: torch_rms_norm(c, x, w, eps),
-            lambda: wginfer.Ops.rms_norm(c_, x_, w_, eps),
+            lambda: Ops.rms_norm(c_, x_, w_, eps),
             device_name,
         )
 

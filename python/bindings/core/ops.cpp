@@ -1,4 +1,4 @@
-#include "common/common.hpp"
+#include "core.hpp"
 
 #include "ops/add/op.hpp"
 #include "ops/argmax/op.hpp"

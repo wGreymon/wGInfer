@@ -1,5 +1,9 @@
-import wginfer
 import torch
+from wginfer.core import DataType
+from wginfer.core import DeviceType
+from wginfer.core import MemcpyKind
+from wginfer.core import RuntimeAPI
+from wginfer.core import Tensor
 
 
 def torch_baseline_device(device_name: str, device_id=0):
@@ -12,41 +16,41 @@ def torch_to_wginfer_memcpy_kind(torch_tensor: torch.Tensor, dst_device_name: st
     src_is_cpu = torch_tensor.device.type == "cpu"
     dst_is_cpu = dst_device_name == "cpu"
     if src_is_cpu and dst_is_cpu:
-        return wginfer.MemcpyKind.D2D
+        return MemcpyKind.D2D
     if src_is_cpu and not dst_is_cpu:
-        return wginfer.MemcpyKind.H2D
+        return MemcpyKind.H2D
     if (not src_is_cpu) and dst_is_cpu:
-        return wginfer.MemcpyKind.D2H
-    return wginfer.MemcpyKind.D2D
+        return MemcpyKind.D2H
+    return MemcpyKind.D2D
 
 
-def wginfer_to_torch_memcpy_kind(src_device_type: wginfer.DeviceType, torch_tensor: torch.Tensor):
-    src_is_cpu = src_device_type == wginfer.DeviceType.CPU
+def wginfer_to_torch_memcpy_kind(src_device_type: DeviceType, torch_tensor: torch.Tensor):
+    src_is_cpu = src_device_type == DeviceType.CPU
     dst_is_cpu = torch_tensor.device.type == "cpu"
     if src_is_cpu and dst_is_cpu:
-        return wginfer.MemcpyKind.D2D
+        return MemcpyKind.D2D
     if src_is_cpu and not dst_is_cpu:
-        return wginfer.MemcpyKind.H2D
+        return MemcpyKind.H2D
     if (not src_is_cpu) and dst_is_cpu:
-        return wginfer.MemcpyKind.D2H
-    return wginfer.MemcpyKind.D2D
+        return MemcpyKind.D2H
+    return MemcpyKind.D2D
 
 
 def host_to_wginfer_memcpy_kind(device_name: str):
     if device_name == "cpu":
-        return wginfer.MemcpyKind.D2D
-    return wginfer.MemcpyKind.H2D
+        return MemcpyKind.D2D
+    return MemcpyKind.H2D
 
 
-def wginfer_to_host_memcpy_kind(device_type: wginfer.DeviceType):
-    if device_type == wginfer.DeviceType.CPU:
-        return wginfer.MemcpyKind.D2D
-    return wginfer.MemcpyKind.D2H
+def wginfer_to_host_memcpy_kind(device_type: DeviceType):
+    if device_type == DeviceType.CPU:
+        return MemcpyKind.D2D
+    return MemcpyKind.D2H
 
 
 def random_tensor(
     shape, dtype_name, device_name, device_id=0, scale=None, bias=None
-) -> tuple[torch.Tensor, wginfer.Tensor]:
+) -> tuple[torch.Tensor, Tensor]:
     torch_tensor = torch.rand(
         shape,
         dtype=torch_dtype(dtype_name),
@@ -57,14 +61,14 @@ def random_tensor(
     if bias is not None:
         torch_tensor += bias
 
-    wginfer_tensor = wginfer.Tensor(
+    wginfer_tensor = Tensor(
         shape,
         dtype=wginfer_dtype(dtype_name),
         device=wginfer_device(device_name),
         device_id=device_id,
     )
 
-    api = wginfer.RuntimeAPI(wginfer_device(device_name))
+    api = RuntimeAPI(wginfer_device(device_name))
     bytes_ = torch_tensor.numel() * torch_tensor.element_size()
     api.memcpy_sync(
         wginfer_tensor.data_ptr(),
@@ -85,14 +89,14 @@ def random_int_tensor(shape, device_name, dtype_name="i64", device_id=0, low=0, 
         device=torch_baseline_device(device_name, device_id),
     )
 
-    wginfer_tensor = wginfer.Tensor(
+    wginfer_tensor = Tensor(
         shape,
         dtype=wginfer_dtype(dtype_name),
         device=wginfer_device(device_name),
         device_id=device_id,
     )
 
-    api = wginfer.RuntimeAPI(wginfer_device(device_name))
+    api = RuntimeAPI(wginfer_device(device_name))
     bytes_ = torch_tensor.numel() * torch_tensor.element_size()
     api.memcpy_sync(
         wginfer_tensor.data_ptr(),
@@ -106,21 +110,21 @@ def random_int_tensor(shape, device_name, dtype_name="i64", device_id=0, low=0, 
 
 def zero_tensor(
     shape, dtype_name, device_name, device_id=0
-) -> tuple[torch.Tensor, wginfer.Tensor]:
+) -> tuple[torch.Tensor, Tensor]:
     torch_tensor = torch.zeros(
         shape,
         dtype=torch_dtype(dtype_name),
         device=torch_baseline_device(device_name, device_id),
     )
 
-    wginfer_tensor = wginfer.Tensor(
+    wginfer_tensor = Tensor(
         shape,
         dtype=wginfer_dtype(dtype_name),
         device=wginfer_device(device_name),
         device_id=device_id,
     )
 
-    api = wginfer.RuntimeAPI(wginfer_device(device_name))
+    api = RuntimeAPI(wginfer_device(device_name))
     bytes_ = torch_tensor.numel() * torch_tensor.element_size()
     api.memcpy_sync(
         wginfer_tensor.data_ptr(),
@@ -134,16 +138,16 @@ def zero_tensor(
 
 def arrange_tensor(
     start, end, device_name, device_id=0
-) -> tuple[torch.Tensor, wginfer.Tensor]:
+) -> tuple[torch.Tensor, Tensor]:
     torch_tensor = torch.arange(start, end, device=torch_baseline_device(device_name, device_id))
-    wginfer_tensor = wginfer.Tensor(
+    wginfer_tensor = Tensor(
         (end - start,),
         dtype=wginfer_dtype("i64"),
         device=wginfer_device(device_name),
         device_id=device_id,
     )
 
-    api = wginfer.RuntimeAPI(wginfer_device(device_name))
+    api = RuntimeAPI(wginfer_device(device_name))
     bytes_ = torch_tensor.numel() * torch_tensor.element_size()
     api.memcpy_sync(
         wginfer_tensor.data_ptr(),
@@ -156,7 +160,7 @@ def arrange_tensor(
 
 
 def check_equal(
-    wginfer_result: wginfer.Tensor,
+    wginfer_result: Tensor,
     torch_answer: torch.Tensor,
     atol=1e-5,
     rtol=1e-5,
@@ -180,7 +184,7 @@ def check_equal(
         device=torch_baseline_device(device_name(wginfer_result.device_type()), wginfer_result.device_id()),
     )
     result = torch.as_strided(tmp, shape, strides)
-    api = wginfer.RuntimeAPI(wginfer_result.device_type())
+    api = RuntimeAPI(wginfer_result.device_type())
     api.memcpy_sync(
         result.data_ptr(),
         wginfer_result.data_ptr(),
@@ -201,7 +205,7 @@ def check_equal(
 
 
 def benchmark(torch_func, wginfer_func, device_name, warmup=10, repeat=100):
-    api = wginfer.RuntimeAPI(wginfer_device(device_name))
+    api = RuntimeAPI(wginfer_device(device_name))
 
     def time_op(func):
         import time
@@ -237,21 +241,21 @@ def torch_device(device_name: str, device_id=0):
 
 def wginfer_device(device_name: str):
     if device_name == "cpu":
-        return wginfer.DeviceType.CPU
+        return DeviceType.CPU
     elif device_name == "nvidia":
-        return wginfer.DeviceType.NVIDIA
+        return DeviceType.NVIDIA
     elif device_name == "metax":
-        return wginfer.DeviceType.METAX
+        return DeviceType.METAX
     else:
         raise ValueError(f"Unsupported device name: {device_name}")
 
 
-def device_name(wginfer_device: wginfer.DeviceType):
-    if wginfer_device == wginfer.DeviceType.CPU:
+def device_name(wginfer_device: DeviceType):
+    if wginfer_device == DeviceType.CPU:
         return "cpu"
-    elif wginfer_device == wginfer.DeviceType.NVIDIA:
+    elif wginfer_device == DeviceType.NVIDIA:
         return "nvidia"
-    elif wginfer_device == wginfer.DeviceType.METAX:
+    elif wginfer_device == DeviceType.METAX:
         return "metax"
     else:
         raise ValueError(f"Unsupported wginfer device: {wginfer_device}")
@@ -282,45 +286,45 @@ def torch_dtype(dtype_name: str):
 
 def wginfer_dtype(dtype_name: str):
     if dtype_name == "f16":
-        return wginfer.DataType.F16
+        return DataType.F16
     elif dtype_name == "f32":
-        return wginfer.DataType.F32
+        return DataType.F32
     elif dtype_name == "f64":
-        return wginfer.DataType.F64
+        return DataType.F64
     elif dtype_name == "bf16":
-        return wginfer.DataType.BF16
+        return DataType.BF16
     elif dtype_name == "i32":
-        return wginfer.DataType.I32
+        return DataType.I32
     elif dtype_name == "i64":
-        return wginfer.DataType.I64
+        return DataType.I64
     elif dtype_name == "u32":
-        return wginfer.DataType.U32
+        return DataType.U32
     elif dtype_name == "u64":
-        return wginfer.DataType.U64
+        return DataType.U64
     elif dtype_name == "bool":
-        return wginfer.DataType.BOOL
+        return DataType.BOOL
     else:
         raise ValueError(f"Unsupported dtype name: {dtype_name}")
 
 
-def dtype_name(wginfer_dtype: wginfer.DataType):
-    if wginfer_dtype == wginfer.DataType.F16:
+def dtype_name(wginfer_dtype: DataType):
+    if wginfer_dtype == DataType.F16:
         return "f16"
-    elif wginfer_dtype == wginfer.DataType.F32:
+    elif wginfer_dtype == DataType.F32:
         return "f32"
-    elif wginfer_dtype == wginfer.DataType.F64:
+    elif wginfer_dtype == DataType.F64:
         return "f64"
-    elif wginfer_dtype == wginfer.DataType.BF16:
+    elif wginfer_dtype == DataType.BF16:
         return "bf16"
-    elif wginfer_dtype == wginfer.DataType.I32:
+    elif wginfer_dtype == DataType.I32:
         return "i32"
-    elif wginfer_dtype == wginfer.DataType.I64:
+    elif wginfer_dtype == DataType.I64:
         return "i64"
-    elif wginfer_dtype == wginfer.DataType.U32:
+    elif wginfer_dtype == DataType.U32:
         return "u32"
-    elif wginfer_dtype == wginfer.DataType.U64:
+    elif wginfer_dtype == DataType.U64:
         return "u64"
-    elif wginfer_dtype == wginfer.DataType.BOOL:
+    elif wginfer_dtype == DataType.BOOL:
         return "bool"
     else:
         raise ValueError(f"Unsupported wginfer dtype: {wginfer_dtype}")

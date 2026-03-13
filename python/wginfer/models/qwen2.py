@@ -5,11 +5,11 @@ from typing import Sequence
 import torch
 from safetensors.torch import load_file as safetensors_load_file
 
-from .._wginfer import DataType
-from .._wginfer import DeviceType
-from .._wginfer import Qwen2Meta
-from .._wginfer import Qwen2Model
-from ..tensor import Tensor
+from .._wginfer.core import DataType
+from .._wginfer.core import DeviceType
+from .._wginfer.models import Qwen2Meta
+from .._wginfer.models import Qwen2Model
+from ..core import Tensor
 
 
 class Qwen2:

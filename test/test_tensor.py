@@ -1,14 +1,14 @@
 import argparse
 
-import wginfer
 import torch
 from test_utils import *
+from wginfer.core import Tensor
 
 
 def test_tensor(device_name: str = "cpu"):
     torch_tensor_host = torch.arange(60, dtype=torch_dtype("i64")).reshape(3, 4, 5)
     torch_tensor = torch_tensor_host.to(torch_baseline_device(device_name))
-    wginfer_tensor = wginfer.Tensor(
+    wginfer_tensor = Tensor(
         (3, 4, 5), dtype=wginfer_dtype("i64"), device=wginfer_device(device_name)
     )
 

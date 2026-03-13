@@ -3,9 +3,9 @@ import os
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-import wginfer
 import torch
 from test_utils import random_tensor, check_equal, benchmark
+from wginfer.core import Ops
 
 
 def torch_swiglu(out, gate, up):
@@ -26,14 +26,14 @@ def test_op_swiglu(
 
     out, out_ = random_tensor(shape, dtype_name, device_name)
     torch_swiglu(out, gate, up)
-    wginfer.Ops.swiglu(out_, gate_, up_)
+    Ops.swiglu(out_, gate_, up_)
 
     assert check_equal(out_, out, atol=atol, rtol=rtol)
 
     if profile:
         benchmark(
             lambda: torch_swiglu(out, gate, up),
-            lambda: wginfer.Ops.swiglu(out_, gate_, up_),
+            lambda: Ops.swiglu(out_, gate_, up_),
             device_name,
         )
 
