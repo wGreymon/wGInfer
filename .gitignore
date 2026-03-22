@@ -1,0 +1,114 @@
+# 文档
+docs/
+# 模型权重
+model.safetensors
+*.safetensors
+
+# 辅助脚本与 IDE/构建生成
+.clangd
+compile_commands.json
+clean.sh
+scripts/
+
+# -----------------------------------------------------------------------------
+# 构建与二进制
+# -----------------------------------------------------------------------------
+# CMake build trees
+build/
+build-cmake*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Binaries
+bin/
+lib/
+*.so
+*.dll
+*.dylib
+*.pyd
+
+# MacOS Cache
+.DS_Store
+
+# Vscode
+.vscode/
+# But keep configuration files
+!.vscode/c_cpp_properties.json
+!.vscode/settings.json
+
+# Python
+__pycache__/
+
+# Log
+*.log
+
+# Cache
+cache/
+
+# JSON
+*.json
+
+#GGUF
+*.gguf
+
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+*.env
+*.venv
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# MyPy and other type checking
+.mypy_cache/
+.dmypy.json
+.pyre/
+
+# Test and coverage
+.coverage
+htmlcov/
+.tox/
+.nox/
+.cache/
+.pytest_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# IDE and editor settings
+.vscode/
+# But keep configuration files
+!.vscode/c_cpp_properties.json
+!.vscode/settings.json
+.idea/
+*.swp
+*~
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
