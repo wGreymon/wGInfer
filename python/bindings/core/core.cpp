@@ -120,6 +120,51 @@ void bind_ops(py::module_ &m) {
             py::arg("inp"),
             py::arg("weight"),
             py::arg("bias") = py::none())
+        .def_static(
+            "linear_attention",
+            [](const std::shared_ptr<PyTensor> &out,
+               const std::shared_ptr<PyTensor> &q,
+               const std::shared_ptr<PyTensor> &k,
+               const std::shared_ptr<PyTensor> &v,
+               const std::shared_ptr<PyTensor> &g,
+               const std::shared_ptr<PyTensor> &beta,
+               py::object initial_state,
+               py::object final_state) {
+                std::shared_ptr<PyTensor> initial_state_tensor;
+                std::shared_ptr<PyTensor> final_state_tensor;
+                if (!initial_state.is_none()) {
+                    initial_state_tensor = initial_state.cast<std::shared_ptr<PyTensor>>();
+                }
+                if (!final_state.is_none()) {
+                    final_state_tensor = final_state.cast<std::shared_ptr<PyTensor>>();
+                }
+                PyOps::linear_attention(
+                    out,
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    initial_state_tensor,
+                    final_state_tensor);
+            },
+            py::arg("out"),
+            py::arg("q"),
+            py::arg("k"),
+            py::arg("v"),
+            py::arg("g"),
+            py::arg("beta"),
+            py::arg("initial_state") = py::none(),
+            py::arg("final_state") = py::none())
+        .def_static("causal_conv1d", &PyOps::causal_conv1d, py::arg("out"), py::arg("inp"), py::arg("weight"))
+        .def_static(
+            "gated_rms_norm",
+            &PyOps::gated_rms_norm,
+            py::arg("out"),
+            py::arg("inp"),
+            py::arg("gate"),
+            py::arg("weight"),
+            py::arg("eps"))
         .def_static("rearrange", &PyOps::rearrange, py::arg("out"), py::arg("inp"))
         .def_static("rms_norm", &PyOps::rms_norm, py::arg("out"), py::arg("inp"), py::arg("weight"), py::arg("eps"))
         .def_static("rope", &PyOps::rope, py::arg("out"), py::arg("inp"), py::arg("pos_ids"), py::arg("theta"))

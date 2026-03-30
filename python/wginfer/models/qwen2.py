@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import Sequence
 
@@ -10,6 +9,34 @@ from .._wginfer.core import DeviceType
 from .._wginfer.models import Qwen2Meta
 from .._wginfer.models import Qwen2Model
 from ..core import Tensor
+from ._config import ModelConfigView
+from ._config import UnsupportedModelConfigError
+from ._config import load_model_config
+from ._config import resolve_model_config
+from ._config import rope_theta_from_text_config
+
+
+def is_qwen2_config(view: ModelConfigView) -> bool:
+    candidates = {view.model_type, view.text_model_type}
+    return any(candidate.startswith("qwen2") for candidate in candidates if candidate)
+
+
+def ensure_qwen2_compatible(view: ModelConfigView, model_path: str | Path) -> None:
+    if is_qwen2_config(view) and not view.has_vision and not view.layer_types:
+        return
+
+    reasons: list[str] = []
+    if not is_qwen2_config(view):
+        reasons.append(f"model family is {view.text_model_type or view.model_type or 'unknown'}")
+    if view.has_vision:
+        reasons.append("contains vision_config (multimodal wrapper)")
+    if view.layer_types:
+        reasons.append("declares explicit layer_types instead of the dense Qwen2 stack")
+
+    reason_text = "; ".join(reasons) if reasons else "unknown incompatibility"
+    raise UnsupportedModelConfigError(
+        f"Model at {Path(model_path)} is not Qwen2-compatible: {reason_text}."
+    )
 
 
 class Qwen2:
@@ -17,28 +44,26 @@ class Qwen2:
         model_path = Path(model_path)
         self._device = device
 
-        config_path = model_path / "config.json"
-        if not config_path.exists():
-            raise FileNotFoundError(f"config.json not found in {model_path}")
-
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
+        config = load_model_config(model_path)
+        config_view = resolve_model_config(config)
+        ensure_qwen2_compatible(config_view, model_path)
+        text_config = config_view.text_config
 
         self.meta = Qwen2Meta()
         self.meta.dtype = DataType.BF16
-        self.meta.nlayer = config.get("num_hidden_layers", config.get("num_layers", 0))
-        self.meta.hs = config.get("hidden_size", 0)
-        self.meta.nh = config.get("num_attention_heads", 0)
-        self.meta.nkvh = config.get("num_key_value_heads", self.meta.nh)
-        self.meta.dh = config.get("head_dim", self.meta.hs // self.meta.nh)
+        self.meta.nlayer = text_config.get("num_hidden_layers", text_config.get("num_layers", 0))
+        self.meta.hs = text_config.get("hidden_size", 0)
+        self.meta.nh = text_config.get("num_attention_heads", 0)
+        self.meta.nkvh = text_config.get("num_key_value_heads", self.meta.nh)
+        self.meta.dh = text_config.get("head_dim", self.meta.hs // self.meta.nh)
         if self.meta.dh == 0:
             self.meta.dh = self.meta.hs // self.meta.nh
-        self.meta.di = config.get("intermediate_size", 0)
-        self.meta.maxseq = config.get("max_position_embeddings", 32768)
-        self.meta.voc = config.get("vocab_size", 0)
-        self.meta.epsilon = config.get("rms_norm_eps", 1e-6)
-        self.meta.theta = config.get("rope_theta", 1000000.0)
-        self.meta.end_token = config.get("eos_token_id", 151643)
+        self.meta.di = text_config.get("intermediate_size", 0)
+        self.meta.maxseq = text_config.get("max_position_embeddings", 32768)
+        self.meta.voc = text_config.get("vocab_size", 0)
+        self.meta.epsilon = text_config.get("rms_norm_eps", 1e-6)
+        self.meta.theta = rope_theta_from_text_config(text_config, 1000000.0)
+        self.meta.end_token = text_config.get("eos_token_id", 151643)
 
         self.model = Qwen2Model(self.meta, device, 0)
         self._load_weights(model_path)

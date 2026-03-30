@@ -180,8 +180,10 @@ static void launch_flash_attention(std::byte *attn_val,
                                    size_t dv,
                                    size_t total_len,
                                    float scale) {
-    constexpr int block_q = 8;
-    constexpr int block_kv = 16;
+    // Keep shared-memory usage below common 48KB limits for larger head dimensions
+    // such as Qwen3.5 full-attention layers (head_dim=256).
+    constexpr int block_q = 4;
+    constexpr int block_kv = 8;
     constexpr int block_size = 128;
     const dim3 grid_dim(CEIL(seqlen, static_cast<size_t>(block_q)), nhead, 1);
     const size_t smem_bytes = sizeof(float) * (block_q * d + block_kv * d + block_kv * dv +

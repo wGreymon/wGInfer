@@ -6,8 +6,12 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 
 - 支持多平台后端，便于在不同硬件环境下部署与验证
 - 支持多模型扩展，当前已接入 [`deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B`](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B)
+- 已接入 `Qwen3.5-4B` 的 `text-only` 推理路径，并完成与 `Transformers` 的首 token 及多步 token 对齐验证
 - 提供 Python 接口，方便集成到训练后处理、评测与业务流程中
 - 提供测试、基准脚本，以及聊天服务、CLI、Web 示例
+
+当前 `Qwen3.5` 的接入方向以 `text-only` 为主：即使模型原始仓库包含 vision tower，当前实现也只围绕 language model 部分推进。
+
 
 ## Roadmap
 
@@ -25,7 +29,6 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 | Device memory management | ✅ | ✅ | ✅ | allocator 仍较基础 |
 | Tensor creation and metadata | ✅ | ✅ | ✅ | shape / strides / offset / storage |
 | Tensor view operations | △ | ✅ | ✅ | `view / permute / slice` 已完成 |
-| Tensor completion | ❌ | ❌ | ❌ | `contiguous / reshape / to` 尚未完成 |
 
 ### Operator Layer
 
@@ -45,8 +48,7 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 | Qwen2 forward inference | ✅ | ✅ | ✅ | 已可对齐 Transformers 输出 |
 | KV cache decoding | ✅ | ✅ | △ | 基础版已完成 |
 | Sampling | ✅ | ✅ | △ | greedy / top-k / top-p / temperature |
-| Qwen3 dense support | ❌ | ❌ | ❌ | 下一阶段重点 |
-| Qwen3.5 support | ❌ | ❌ | ❌ | 需新架构支持，不是小改动 |
+| Qwen3.5 text-only support | △ | ✅ | △ | 已跑通 text-only，多步 token 可与 Transformers 对齐 |
 | Quantized model inference | ❌ | ❌ | ❌ | 面向 4B 模型的重点方向 |
 | Weight validation | ❌ | ❌ | ❌ | 建议加入模型完整性检查 |
 
@@ -55,7 +57,7 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 | Topic | Status | Code | Test | Notes |
 |---|---|---:|---:|---|
 | Python bindings | ✅ | ✅ | △ | pybind11 接口已可用 |
-| Python high-level model API | ✅ | ✅ | △ | `wginfer.models.Qwen2` |
+| Python high-level model API | ✅ | ✅ | △ | `wginfer.models.create_model` / `wginfer.models.Qwen2` / `wginfer.models.Qwen3_5` |
 | Benchmark scripts | ✅ | ✅ | △ | 已有吞吐对比脚本 |
 | CLI demo | ✅ | ✅ | ✅ | 可访问本地服务 |
 | Web demo | ✅ | ✅ | ✅ | 简单聊天界面 |
@@ -79,7 +81,7 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 下面是一组在 `MetaX` 环境上使用 `DeepSeek-R1-Distill-Qwen-1.5B` 跑出的示例基准结果，对比对象为 `Hugging Face Transformers（PyTorch backend）` 基线：
 
 ```bash
-PYTHONPATH=python python test/benchmark_infer.py --device metax --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/
+PYTHONPATH=python python test/benchmark_infer.py --model-type qwen2 --device metax --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/
 ```
 
 总体吞吐结果：
@@ -107,7 +109,7 @@ PYTHONPATH=python python test/benchmark_infer.py --device metax --model ~/model_
 下面是一组在 `NVIDIA` 环境上使用 `DeepSeek-R1-Distill-Qwen-1.5B` 跑出的示例基准结果，对比对象为 `Hugging Face Transformers（PyTorch backend）` 基线：
 
 ```bash
-PYTHONPATH=python python test/benchmark_infer.py --device nvidia --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/
+PYTHONPATH=python python test/benchmark_infer.py --model-type qwen2 --device nvidia --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/
 ```
 
 总体吞吐结果：
@@ -191,13 +193,27 @@ PYTHONPATH=python python test/ops/linear.py --device metax
 使用 `test_infer.py --test` 可以对比 `Hugging Face Transformers` 与 `wGInfer` 的输出 token 是否一致：
 
 ```bash
-PYTHONPATH=python python test/test_infer.py --device nvidia --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/ --test
+PYTHONPATH=python python test/test_infer.py --model-type qwen2 --device nvidia --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/ --test
 ```
 
 如果在 `MetaX` 环境中运行，则使用：
 
 ```bash
-PYTHONPATH=python python test/test_infer.py --device metax --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/ --test
+PYTHONPATH=python python test/test_infer.py --model-type qwen2 --device metax --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/ --test
+```
+
+### Qwen3.5 text-only verification
+
+当前 `Qwen3.5` 主要支持 `text-only` 路径。最小验证命令示例：
+
+```bash
+PYTHONPATH=python python test/test_infer.py --model-type qwen3_5 --device nvidia --model ~/model_pkg/Qwen3.5-4B --prompt "你好，请简单介绍一下你自己" --max_steps 20
+```
+
+如果需要查看首 token logits、分层状态和 linear-attention 中间量，可以增加调试开关：
+
+```bash
+PYTHONPATH=python python test/test_infer.py --model-type qwen3_5 --device nvidia --model ~/model_pkg/Qwen3.5-4B --prompt "你好，请简单介绍一下你自己" --max_steps 1 --debug-first-step --debug-layers --debug-linear-layer
 ```
 
 ## Web Demo
@@ -211,7 +227,7 @@ python -m pip install fastapi uvicorn
 启动本地聊天服务：
 
 ```bash
-PYTHONPATH=python python test/chat_server.py --device nvidia --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/
+PYTHONPATH=python python app/chat_server.py --model-type qwen2 --device nvidia --model ~/model_pkg/DeepSeek-R1-Distill-Qwen-1.5B/
 ```
 
 然后在浏览器中打开：
@@ -223,5 +239,5 @@ http://127.0.0.1:8000/
 如果需要命令行客户端访问同一个服务，也可以执行：
 
 ```bash
-PYTHONPATH=python python test/chat_cli.py --url http://127.0.0.1:8000/v1/chat/completions --model wginfer-qwen2
+PYTHONPATH=python python app/chat_cli.py --url http://127.0.0.1:8000/v1/chat/completions --model wginfer-qwen2
 ```

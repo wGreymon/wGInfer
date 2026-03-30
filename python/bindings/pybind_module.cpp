@@ -12,4 +12,5 @@ PYBIND11_MODULE(_wginfer, m) {
 
     wginfer::pybind::bind_core(core_m);
     wginfer::pybind::bind_qwen2(models_m);
+    wginfer::pybind::bind_qwen3_5(models_m);
 }

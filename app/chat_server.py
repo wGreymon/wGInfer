@@ -66,11 +66,12 @@ def normalize_messages(raw_messages: Any) -> List[Dict[str, str]]:
 
 
 class ChatEngine:
-    def __init__(self, model_path: str, device: str):
+    def __init__(self, model_path: str, device: str, model_type: str):
         self.model_path = model_path
         self.device_name = device
+        self.model_type = model_type
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        self.model = wginfer.models.Qwen2(model_path, wginfer_device(device))
+        self.model = wginfer.models.create_model(model_type, model_path, wginfer_device(device))
         self._infer_lock = threading.Lock()
 
     def _build_inputs(self, messages: List[Dict[str, str]]) -> List[int]:
@@ -313,6 +314,7 @@ def create_app(engine: ChatEngine, served_model_name: str) -> FastAPI:
 def parse_args():
     parser = argparse.ArgumentParser(description="wGInfer OpenAI-style Chat Server")
     parser.add_argument("--model", required=True, type=str, help="Path to model directory")
+    parser.add_argument("--model-type", default="qwen2", choices=wginfer.models.supported_model_types(), type=str)
     parser.add_argument("--device", default="cpu", choices=["cpu", "nvidia", "metax"], type=str)
     parser.add_argument("--host", default="127.0.0.1", type=str)
     parser.add_argument("--port", default=8000, type=int)
@@ -322,7 +324,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    engine = ChatEngine(model_path=args.model, device=args.device)
+    engine = ChatEngine(model_path=args.model, device=args.device, model_type=args.model_type)
     app = create_app(engine, served_model_name=args.served_model_name)
 
     try:

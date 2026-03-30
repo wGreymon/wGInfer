@@ -11,13 +11,15 @@ REPO_ROOT = PKG_ROOT.parent
 PKG_NAME = "wginfer"
 LIB_DIR = PKG_ROOT / PKG_NAME / "libwginfer"
 BINDINGS_DIR = PKG_ROOT / "bindings"
-BINDING_SOURCES = sorted(
-    path.relative_to(PKG_ROOT).as_posix() for path in BINDINGS_DIR.rglob("*.cpp")
-)
 
 # Make `python python/setup.py build_ext --inplace` and
 # `cd python && python setup.py build_ext --inplace` behave the same.
 os.chdir(PKG_ROOT)
+
+# Keep extension sources strictly relative to `python/setup.py` so that
+# `pip install ./python` can build wheels without setuptools rejecting
+# absolute paths inside `ext_modules`.
+BINDING_SOURCES = sorted(path.as_posix() for path in Path("bindings").rglob("*.cpp"))
 
 
 def linux_rpath():

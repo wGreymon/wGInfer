@@ -3,7 +3,10 @@
 #include "ops/add/op.hpp"
 #include "ops/argmax/op.hpp"
 #include "ops/embedding/op.hpp"
+#include "ops/causal_conv1d/op.hpp"
+#include "ops/gated_rms_norm/op.hpp"
 #include "ops/linear/op.hpp"
+#include "ops/linear_attention/op.hpp"
 #include "ops/rearrange/op.hpp"
 #include "ops/rms_norm/op.hpp"
 #include "ops/rope/op.hpp"
@@ -43,6 +46,42 @@ void PyOps::linear(
         inp->tensor(),
         weight->tensor(),
         bias ? bias->tensor() : nullptr);
+}
+
+void PyOps::linear_attention(
+    const std::shared_ptr<PyTensor> &out,
+    const std::shared_ptr<PyTensor> &q,
+    const std::shared_ptr<PyTensor> &k,
+    const std::shared_ptr<PyTensor> &v,
+    const std::shared_ptr<PyTensor> &g,
+    const std::shared_ptr<PyTensor> &beta,
+    const std::shared_ptr<PyTensor> &initial_state,
+    const std::shared_ptr<PyTensor> &final_state) {
+    wginfer::ops::linear_attention(
+        out->tensor(),
+        q->tensor(),
+        k->tensor(),
+        v->tensor(),
+        g->tensor(),
+        beta->tensor(),
+        initial_state ? initial_state->tensor() : nullptr,
+        final_state ? final_state->tensor() : nullptr);
+}
+
+void PyOps::causal_conv1d(
+    const std::shared_ptr<PyTensor> &out,
+    const std::shared_ptr<PyTensor> &inp,
+    const std::shared_ptr<PyTensor> &weight) {
+    wginfer::ops::causal_conv1d(out->tensor(), inp->tensor(), weight->tensor());
+}
+
+void PyOps::gated_rms_norm(
+    const std::shared_ptr<PyTensor> &out,
+    const std::shared_ptr<PyTensor> &inp,
+    const std::shared_ptr<PyTensor> &gate,
+    const std::shared_ptr<PyTensor> &weight,
+    float eps) {
+    wginfer::ops::gated_rms_norm(out->tensor(), inp->tensor(), gate->tensor(), weight->tensor(), eps);
 }
 
 void PyOps::rearrange(

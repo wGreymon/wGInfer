@@ -92,6 +92,25 @@ public:
         const std::shared_ptr<PyTensor> &inp,
         const std::shared_ptr<PyTensor> &weight,
         const std::shared_ptr<PyTensor> &bias);
+    static void linear_attention(
+        const std::shared_ptr<PyTensor> &out,
+        const std::shared_ptr<PyTensor> &q,
+        const std::shared_ptr<PyTensor> &k,
+        const std::shared_ptr<PyTensor> &v,
+        const std::shared_ptr<PyTensor> &g,
+        const std::shared_ptr<PyTensor> &beta,
+        const std::shared_ptr<PyTensor> &initial_state,
+        const std::shared_ptr<PyTensor> &final_state);
+    static void causal_conv1d(
+        const std::shared_ptr<PyTensor> &out,
+        const std::shared_ptr<PyTensor> &inp,
+        const std::shared_ptr<PyTensor> &weight);
+    static void gated_rms_norm(
+        const std::shared_ptr<PyTensor> &out,
+        const std::shared_ptr<PyTensor> &inp,
+        const std::shared_ptr<PyTensor> &gate,
+        const std::shared_ptr<PyTensor> &weight,
+        float eps);
     static void rearrange(
         const std::shared_ptr<PyTensor> &out,
         const std::shared_ptr<PyTensor> &inp);

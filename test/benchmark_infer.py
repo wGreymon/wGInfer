@@ -60,8 +60,8 @@ def load_hf_model(model_path, device_name):
     return tokenizer, model, model_path
 
 
-def load_wginfer_model(model_path, device_name):
-    return wginfer.models.Qwen2(model_path, wginfer_device(device_name))
+def load_wginfer_model(model_path, device_name, model_type):
+    return wginfer.models.create_model(model_type, model_path, wginfer_device(device_name))
 
 
 def sync_torch(device_name):
@@ -188,6 +188,7 @@ def print_report(cases, torch_rows, wginfer_rows):
 def main():
     parser = argparse.ArgumentParser(description="Benchmark Torch vs wGInfer inference throughput.")
     parser.add_argument("--model", required=True, type=str)
+    parser.add_argument("--model-type", default="qwen2", choices=wginfer.models.supported_model_types(), type=str)
     parser.add_argument("--device", default="nvidia", choices=["cpu", "nvidia", "metax"], type=str)
     parser.add_argument("--prompts", default="short,medium,long", type=str)
     parser.add_argument("--max-new-tokens", default="32,64,128", type=str)
@@ -227,7 +228,7 @@ def main():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-    wginfer_model = load_wginfer_model(model_path, args.device)
+    wginfer_model = load_wginfer_model(model_path, args.device, args.model_type)
     wginfer_rows = benchmark_backend(
         "wginfer", tokenizer, wginfer_model, cases, args.warmup, args.repeat, top_k, top_p, temperature, args.device
     )
