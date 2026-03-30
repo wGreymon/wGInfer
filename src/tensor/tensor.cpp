@@ -16,6 +16,29 @@ namespace wginfer {
 Tensor::Tensor(TensorMeta meta, core::storage_t storage, size_t offset)
     : _meta(std::move(meta)), _storage(std::move(storage)), _offset(offset) {}
 
+/*
+Tensor::create(shape, dtype, device_type, device_id)
+    |
+    |-- 计算 strides / numel / TensorMeta
+    |
+    |-- Context
+    |     |
+    |     |-- setDevice(device_type, device_id)
+    |     |-- runtime()
+    |
+    |-- Runtime
+    |     |
+    |     |-- allocateDeviceStorage(size)
+    |     |      |
+    |     |      |-- Allocator::allocate(size)
+    |     |      |-- 包装成 Storage
+    |     |
+    |     |-- 或 allocateHostStorage(size)
+    |
+    |-- new Tensor(meta, storage, offset=0)
+    |
+    ---> shared_ptr<Tensor>
+*/
 tensor_t Tensor::create(const std::vector<size_t> &shape,
                         wginferDataType_t dtype,
                         wginferDeviceType_t device_type,
@@ -280,8 +303,8 @@ tensor_t Tensor::slice(size_t dim, size_t start, size_t end) const {
     return std::shared_ptr<Tensor>(new Tensor(new_meta, _storage, new_offset));
 }
 
-void Tensor::load(const void *src_) {
-    CHECK_ARGUMENT(src_ != nullptr, "src must not be null");
+void Tensor::load(const void *src) {
+    CHECK_ARGUMENT(src != nullptr, "src must not be null");
     CHECK_ARGUMENT(isContiguous(), "load only supports contiguous tensors");
 
     core::context().setDevice(this->deviceType(), this->deviceId());
@@ -291,7 +314,7 @@ void Tensor::load(const void *src_) {
     wginferMemcpyKind_t kind =
         (this->deviceType() == WGINFER_DEVICE_CPU) ? WGINFER_MEMCPY_H2H : WGINFER_MEMCPY_H2D;
 
-    api->memcpy_sync(this->data(), src_, size_bytes, kind);
+    api->memcpy_sync(this->data(), src, size_bytes, kind);
 }
 
 

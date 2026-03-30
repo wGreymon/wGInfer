@@ -9,6 +9,71 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 - 提供 Python 接口，方便集成到训练后处理、评测与业务流程中
 - 提供测试、基准脚本，以及聊天服务、CLI、Web 示例
 
+## Roadmap
+
+状态说明：
+
+- `✅` 已具备
+- `△` 部分具备，仍需补齐
+- `❌` 尚未开始
+
+### Foundation Layer
+
+| Topic | Status | Code | Test | Notes |
+|---|---|---:|---:|---|
+| Runtime abstraction | ✅ | ✅ | ✅ | CPU / NVIDIA / MetaX runtime API |
+| Device memory management | ✅ | ✅ | ✅ | allocator 仍较基础 |
+| Tensor creation and metadata | ✅ | ✅ | ✅ | shape / strides / offset / storage |
+| Tensor view operations | △ | ✅ | ✅ | `view / permute / slice` 已完成 |
+| Tensor completion | ❌ | ❌ | ❌ | `contiguous / reshape / to` 尚未完成 |
+
+### Operator Layer
+
+| Topic | Status | Code | Test | Notes |
+|---|---|---:|---:|---|
+| Add / Argmax / Embedding | ✅ | ✅ | ✅ | 基础算子已覆盖 |
+| Linear | ✅ | ✅ | ✅ | CPU 优化路径已具备 |
+| RMSNorm / RoPE / SwiGLU | ✅ | ✅ | ✅ | 已具备 Qwen2 所需能力 |
+| Self-Attention / GQA | ✅ | ✅ | ✅ | 已支持 Qwen2 注意力结构 |
+| Rearrange / advanced tensor ops | ❌ | ❌ | ❌ | 仍需补齐 |
+
+### Model Layer
+
+| Topic | Status | Code | Test | Notes |
+|---|---|---:|---:|---|
+| Qwen2 model loading | ✅ | ✅ | △ | safetensors -> internal weights |
+| Qwen2 forward inference | ✅ | ✅ | ✅ | 已可对齐 Transformers 输出 |
+| KV cache decoding | ✅ | ✅ | △ | 基础版已完成 |
+| Sampling | ✅ | ✅ | △ | greedy / top-k / top-p / temperature |
+| Qwen3 dense support | ❌ | ❌ | ❌ | 下一阶段重点 |
+| Qwen3.5 support | ❌ | ❌ | ❌ | 需新架构支持，不是小改动 |
+| Quantized model inference | ❌ | ❌ | ❌ | 面向 4B 模型的重点方向 |
+| Weight validation | ❌ | ❌ | ❌ | 建议加入模型完整性检查 |
+
+### Serving Layer
+
+| Topic | Status | Code | Test | Notes |
+|---|---|---:|---:|---|
+| Python bindings | ✅ | ✅ | △ | pybind11 接口已可用 |
+| Python high-level model API | ✅ | ✅ | △ | `wginfer.models.Qwen2` |
+| Benchmark scripts | ✅ | ✅ | △ | 已有吞吐对比脚本 |
+| CLI demo | ✅ | ✅ | ✅ | 可访问本地服务 |
+| Web demo | ✅ | ✅ | ✅ | 简单聊天界面 |
+| OpenAI-style chat server | ✅ | ✅ | ❌ | 仍缺自动化测试 |
+
+### Optimization Layer
+
+| Topic | Status | Code | Test | Notes |
+|---|---|---:|---:|---|
+| CPU linear optimization | ✅ | ✅ | ✅ | blocked / OpenBLAS 路径 |
+| CUDA operator kernels | △ | ✅ | △ | 已有基础实现，仍可继续优化 |
+| Memory reuse / workspace | △ | ✅ | ❌ | 模型内部已有部分复用 |
+| Quantized linear kernels | ❌ | ❌ | ❌ | 建议先做 `W4A16` |
+| KV cache optimization | △ | ✅ | ❌ | 还没有 paged / quant cache |
+| Continuous batching | ❌ | ❌ | ❌ | 服务化后重要能力 |
+| Chunked prefill | ❌ | ❌ | ❌ | 长上下文优化方向 |
+| Paged attention | ❌ | ❌ | ❌ | 更高阶推理优化 |
+
 ## MetaX Benchmark
 
 下面是一组在 `MetaX` 环境上使用 `DeepSeek-R1-Distill-Qwen-1.5B` 跑出的示例基准结果，对比对象为 `Hugging Face Transformers（PyTorch backend）` 基线：

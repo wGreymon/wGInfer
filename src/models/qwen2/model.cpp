@@ -240,7 +240,7 @@ void Model::update_kv_cache(size_t layer_idx, tensor_t k_new, tensor_t v_new, si
 }
 
 // transformer block
-void Model::forward_layer(size_t layer_idx, tensor_t &x, size_t seqlen, size_t total_len, tensor_t pos_ids_q) {
+void Model:: forward_transformer_block(size_t layer_idx, tensor_t &x, size_t seqlen, size_t total_len, tensor_t pos_ids_q) {
     // 设置设备上下文
     wginfer::core::context().setDevice(_device_type, _device_id);
 
@@ -352,7 +352,7 @@ tensor_t Model::forward(tensor_t input_ids, size_t seqlen, size_t total_len) {
 
     // 3. Transformer layers
     for (size_t i = 0; i < _meta.nlayer; ++i) {
-        forward_layer(i, _x, seqlen, total_len, _pos_ids_q);
+        forward_transformer_block(i, _x, seqlen, total_len, _pos_ids_q);
     }
 
     // 4. Output norm
@@ -377,7 +377,7 @@ int64_t Model::infer(
     // 设置设备上下文
     wginfer::core::context().setDevice(_device_type, _device_id);
 
-    // 创建输入张量
+    // 创建输入张量：即创建一个token序列
     ensure_tensor(_input_ids_buf, {ntoken}, WGINFER_DTYPE_I64);
     _input_ids_buf->load(token_ids);
 

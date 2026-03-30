@@ -102,13 +102,13 @@ private:
     tensor_t _x_mlp;         // MLP 残差输出 [seqlen, hs]
     tensor_t _logits;        // 输出 logits [seqlen, voc]
     tensor_t _pos_ids_q;     // 位置 id [seqlen]
-    tensor_t _input_ids_buf; // infer 输入缓存 [ntoken]
+    tensor_t _input_ids_buf; // infer 输入缓存 tokenids[ntoken]
     tensor_t _max_idx;       // argmax 索引缓存 [1]
     tensor_t _max_val;       // argmax 值缓存 [1]
 
     // 前向传播辅助函数
     void ensure_tensor(tensor_t &tensor, const std::vector<size_t> &shape, wginferDataType_t dtype);
-    void forward_layer(size_t layer_idx, tensor_t &x, size_t seqlen, size_t total_len, tensor_t pos_ids_q);
+    void forward_transformer_block(size_t layer_idx, tensor_t &x, size_t seqlen, size_t total_len, tensor_t pos_ids_q);
     void update_kv_cache(size_t layer_idx, tensor_t k_new, tensor_t v_new, size_t seqlen, size_t old_len);
 
 public:
