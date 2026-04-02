@@ -7,6 +7,9 @@ option(WGINFER_ENABLE_NVIDIA "Build NVIDIA CUDA backend" ON)
 option(WGINFER_ENABLE_METAX "Build MetaX backend" OFF)
 option(WGINFER_COPY_TO_PYTHON "Copy built shared library into python package" ON)
 
+set(MACA_HOME "$ENV{MACA_HOME}" CACHE PATH "MetaX MACA installation root")
+set(MXCC "$ENV{MXCC}" CACHE FILEPATH "Path to the MetaX mxcc compiler")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -163,6 +166,7 @@ if(WGINFER_ENABLE_METAX)
     target_compile_definitions(wginfer PRIVATE ENABLE_METAX_API)
 
     set(WGINFER_METAX_ROOT_CANDIDATES
+        "${MACA_HOME}"
         "$ENV{MACA_HOME}"
         "/opt/maca"
         "/usr/local/maca"
@@ -186,18 +190,28 @@ if(WGINFER_ENABLE_METAX)
         endif()
     endforeach()
 
-    set(WGINFER_MXCC "$ENV{MXCC}")
-    if(NOT WGINFER_MXCC AND DEFINED ENV{MACA_HOME})
-        set(candidate_mxcc "$ENV{MACA_HOME}/mxgpu_llvm/bin/mxcc")
-        if(EXISTS "${candidate_mxcc}")
-            set(WGINFER_MXCC "${candidate_mxcc}")
-        endif()
+    unset(WGINFER_MXCC)
+    unset(WGINFER_MXCC CACHE)
+    if(MXCC)
+        set(WGINFER_MXCC "${MXCC}")
+    elseif(DEFINED ENV{MXCC} AND NOT "$ENV{MXCC}" STREQUAL "")
+        set(WGINFER_MXCC "$ENV{MXCC}")
     endif()
     if(NOT WGINFER_MXCC)
-        find_program(WGINFER_MXCC NAMES mxcc)
+        set(WGINFER_METAX_BIN_HINTS)
+        foreach(root_dir IN LISTS WGINFER_METAX_ROOT_CANDIDATES)
+            if(root_dir)
+                wginfer_append_unique_if_exists(WGINFER_METAX_BIN_HINTS "${root_dir}/bin")
+                wginfer_append_unique_if_exists(WGINFER_METAX_BIN_HINTS "${root_dir}/mxgpu_llvm/bin")
+            endif()
+        endforeach()
+        find_program(WGINFER_MXCC NAMES mxcc HINTS ${WGINFER_METAX_BIN_HINTS})
     endif()
     if(NOT WGINFER_MXCC)
-        message(FATAL_ERROR "WGINFER_ENABLE_METAX=ON but mxcc was not found. Set MXCC or MACA_HOME first.")
+        message(FATAL_ERROR
+            "WGINFER_ENABLE_METAX=ON but mxcc was not found. "
+            "Pass -DMXCC=/path/to/mxcc or -DMACA_HOME=/path/to/maca, "
+            "or export MXCC/MACA_HOME before running CMake.")
     endif()
 
     if(WGINFER_METAX_INCLUDE_DIRS)
