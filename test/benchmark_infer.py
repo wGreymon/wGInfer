@@ -1,21 +1,25 @@
 import argparse
-import gc
 import io
+import json
 import logging
 import os
+from pathlib import Path
 import statistics
+import subprocess
 import sys
 import time
 
-import wginfer
 import torch
+import wginfer
 from huggingface_hub import snapshot_download
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from wginfer.core import RuntimeAPI
 
-from test_utils import wginfer_device, torch_device
+from test_utils import torch_device, wginfer_device
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+RESULT_JSON_PREFIX = "__RESULT_JSON__="
 
 PROMPTS = {
     "short": "Who are you?",
@@ -42,26 +46,36 @@ def parse_csv(text, caster=str):
     return [caster(x.strip()) for x in text.split(",") if x.strip()]
 
 
-def load_hf_model(model_path, device_name):
+def resolve_model_path(model_path):
     model_id = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-    if model_path and os.path.isdir(model_path):
+    if model_path:
         model_path = os.path.expanduser(model_path)
+    if model_path and os.path.isdir(model_path):
         print(f"Loading model from local path: {model_path}")
-    else:
-        print(f"Loading model from Hugging Face: {model_id}")
-        model_path = snapshot_download(model_id)
+        return model_path
+    print(f"Loading model from Hugging Face: {model_id}")
+    return snapshot_download(model_id)
 
+
+def load_hf_model(model_path, device_name):
+    model_path = resolve_model_path(model_path)
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     kwargs = {"device_map": torch_device(device_name), "trust_remote_code": True}
     try:
         model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16, **kwargs)
     except TypeError:
         model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, **kwargs)
-    return tokenizer, model, model_path
+    return tokenizer, model
 
 
 def load_wginfer_model(model_path, device_name, model_type):
     return wginfer.models.create_model(model_type, model_path, wginfer_device(device_name))
+
+
+def load_tokenizer_only(model_path):
+    model_path = resolve_model_path(model_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    return tokenizer, model_path
 
 
 def sync_torch(device_name):
@@ -82,6 +96,29 @@ def build_input_ids(tokenizer, prompt):
     return tokenizer.encode(text)
 
 
+def build_cases(tokenizer, prompt_names, max_new_tokens_list):
+    return [
+        {
+            "prompt_name": prompt_name,
+            "max_new_tokens": max_new_tokens,
+            "input_ids": build_input_ids(tokenizer, PROMPTS[prompt_name]),
+        }
+        for prompt_name in prompt_names
+        for max_new_tokens in max_new_tokens_list
+    ]
+
+
+def build_case_order(prompt_names, max_new_tokens_list):
+    return [
+        {
+            "prompt_name": prompt_name,
+            "max_new_tokens": max_new_tokens,
+        }
+        for prompt_name in prompt_names
+        for max_new_tokens in max_new_tokens_list
+    ]
+
+
 def run_torch_case(tokenizer, model, input_ids, max_new_tokens, top_k, top_p, temperature, device_name):
     inputs = torch.tensor(input_ids, dtype=torch.int64, device=model.device).unsqueeze(0)
     attention_mask = torch.ones_like(inputs)
@@ -100,7 +137,7 @@ def run_torch_case(tokenizer, model, input_ids, max_new_tokens, top_k, top_p, te
         )
     sync_torch(device_name)
     out_tokens = outputs[0].tolist()
-    return time.perf_counter() - start, len(out_tokens) - len(input_ids), out_tokens
+    return time.perf_counter() - start, len(out_tokens) - len(input_ids)
 
 
 def run_wginfer_case(model, input_ids, max_new_tokens, top_k, top_p, temperature, device_name):
@@ -114,7 +151,7 @@ def run_wginfer_case(model, input_ids, max_new_tokens, top_k, top_p, temperature
         temperature=temperature,
     )
     sync_wginfer(device_name)
-    return time.perf_counter() - start, len(out_tokens) - len(input_ids), out_tokens
+    return time.perf_counter() - start, len(out_tokens) - len(input_ids)
 
 
 def benchmark_backend(backend, tokenizer, model, cases, warmup, repeat, top_k, top_p, temperature, device_name):
@@ -122,20 +159,50 @@ def benchmark_backend(backend, tokenizer, model, cases, warmup, repeat, top_k, t
     for case in cases:
         for _ in range(warmup):
             if backend == "torch":
-                run_torch_case(tokenizer, model, case["input_ids"], case["max_new_tokens"], top_k, top_p, temperature, device_name)
+                run_torch_case(
+                    tokenizer,
+                    model,
+                    case["input_ids"],
+                    case["max_new_tokens"],
+                    top_k,
+                    top_p,
+                    temperature,
+                    device_name,
+                )
             else:
-                run_wginfer_case(model, case["input_ids"], case["max_new_tokens"], top_k, top_p, temperature, device_name)
+                run_wginfer_case(
+                    model,
+                    case["input_ids"],
+                    case["max_new_tokens"],
+                    top_k,
+                    top_p,
+                    temperature,
+                    device_name,
+                )
 
         latencies = []
         generated = []
         for _ in range(repeat):
             if backend == "torch":
-                elapsed, new_tokens, _ = run_torch_case(
-                    tokenizer, model, case["input_ids"], case["max_new_tokens"], top_k, top_p, temperature, device_name
+                elapsed, new_tokens = run_torch_case(
+                    tokenizer,
+                    model,
+                    case["input_ids"],
+                    case["max_new_tokens"],
+                    top_k,
+                    top_p,
+                    temperature,
+                    device_name,
                 )
             else:
-                elapsed, new_tokens, _ = run_wginfer_case(
-                    model, case["input_ids"], case["max_new_tokens"], top_k, top_p, temperature, device_name
+                elapsed, new_tokens = run_wginfer_case(
+                    model,
+                    case["input_ids"],
+                    case["max_new_tokens"],
+                    top_k,
+                    top_p,
+                    temperature,
+                    device_name,
                 )
             latencies.append(elapsed)
             generated.append(new_tokens)
@@ -185,6 +252,119 @@ def print_report(cases, torch_rows, wginfer_rows):
     print(f"Overall speedup          : {overall_speedup:.2f}x")
 
 
+def build_result_payload(rows):
+    return {"rows": rows}
+
+
+def normalize_rows_for_json(rows):
+    return {
+        f"{prompt_name}::{max_new_tokens}": value
+        for (prompt_name, max_new_tokens), value in rows.items()
+    }
+
+
+def parse_rows_from_json(rows):
+    parsed = {}
+    for key, value in rows.items():
+        prompt_name, max_new_tokens = key.split("::", 1)
+        parsed[(prompt_name, int(max_new_tokens))] = value
+    return parsed
+
+
+def run_backend_only(args):
+    prompt_names = parse_csv(args.prompts)
+    max_new_tokens_list = parse_csv(args.max_new_tokens, int)
+
+    for name in prompt_names:
+        if name not in PROMPTS:
+            raise ValueError(f"Unknown prompt preset: {name}. Valid keys: {list(PROMPTS.keys())}")
+
+    if args.backend_only == "torch":
+        tokenizer, model = load_hf_model(args.model, args.device)
+        cases = build_cases(tokenizer, prompt_names, max_new_tokens_list)
+        rows = benchmark_backend(
+            "torch",
+            tokenizer,
+            model,
+            cases,
+            args.warmup,
+            args.repeat,
+            args.top_k,
+            args.top_p,
+            args.temperature,
+            args.device,
+        )
+        print(RESULT_JSON_PREFIX + json.dumps(build_result_payload(normalize_rows_for_json(rows)), ensure_ascii=False))
+        return
+
+    if args.backend_only == "wginfer":
+        tokenizer, model_path = load_tokenizer_only(args.model)
+        model = load_wginfer_model(model_path, args.device, args.model_type)
+        cases = build_cases(tokenizer, prompt_names, max_new_tokens_list)
+        rows = benchmark_backend(
+            "wginfer",
+            tokenizer,
+            model,
+            cases,
+            args.warmup,
+            args.repeat,
+            args.top_k,
+            args.top_p,
+            args.temperature,
+            args.device,
+        )
+        print(RESULT_JSON_PREFIX + json.dumps(build_result_payload(normalize_rows_for_json(rows)), ensure_ascii=False))
+        return
+
+    raise ValueError(f"Unknown backend_only value: {args.backend_only}")
+
+
+def run_backend_subprocess(args, backend, model_path):
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--backend-only",
+        backend,
+        "--model-type",
+        args.model_type,
+        "--device",
+        args.device,
+        "--prompts",
+        args.prompts,
+        "--max-new-tokens",
+        args.max_new_tokens,
+        "--warmup",
+        str(args.warmup),
+        "--repeat",
+        str(args.repeat),
+        "--top-k",
+        str(args.top_k),
+        "--top-p",
+        str(args.top_p),
+        "--temperature",
+        str(args.temperature),
+        "--model",
+        str(model_path),
+    ]
+
+    completed = subprocess.run(cmd, text=True, capture_output=True)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"{backend} subprocess failed with exit code {completed.returncode}\n"
+            f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
+        )
+
+    lines = completed.stdout.splitlines()
+    for line in reversed(lines):
+        if line.startswith(RESULT_JSON_PREFIX):
+            payload = json.loads(line[len(RESULT_JSON_PREFIX):])
+            return parse_rows_from_json(payload["rows"])
+
+    raise RuntimeError(
+        f"Failed to parse {backend} subprocess result.\nstdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Benchmark Torch vs wGInfer inference throughput.")
     parser.add_argument("--model", required=True, type=str)
@@ -197,41 +377,23 @@ def main():
     parser.add_argument("--top-k", default=1, type=int)
     parser.add_argument("--top-p", default=1.0, type=float)
     parser.add_argument("--temperature", default=1.0, type=float)
+    parser.add_argument("--backend-only", choices=["torch", "wginfer"], default=None)
     args = parser.parse_args()
 
-    top_k, top_p, temperature = args.top_k, args.top_p, args.temperature
+    if args.backend_only is not None:
+        run_backend_only(args)
+        return
 
+    model_path = resolve_model_path(args.model)
     prompt_names = parse_csv(args.prompts)
     max_new_tokens_list = parse_csv(args.max_new_tokens, int)
     for name in prompt_names:
         if name not in PROMPTS:
             raise ValueError(f"Unknown prompt preset: {name}. Valid keys: {list(PROMPTS.keys())}")
+    cases = build_case_order(prompt_names, max_new_tokens_list)
 
-    tokenizer, torch_model, model_path = load_hf_model(args.model, args.device)
-    cases = [
-        {
-            "prompt_name": prompt_name,
-            "max_new_tokens": max_new_tokens,
-            "input_ids": build_input_ids(tokenizer, PROMPTS[prompt_name]),
-        }
-        for prompt_name in prompt_names
-        for max_new_tokens in max_new_tokens_list
-    ]
-
-    torch_rows = benchmark_backend(
-        "torch", tokenizer, torch_model, cases, args.warmup, args.repeat, top_k, top_p, temperature, args.device
-    )
-
-    del torch_model
-    gc.collect()
-    if is_gpu_device(args.device):
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-
-    wginfer_model = load_wginfer_model(model_path, args.device, args.model_type)
-    wginfer_rows = benchmark_backend(
-        "wginfer", tokenizer, wginfer_model, cases, args.warmup, args.repeat, top_k, top_p, temperature, args.device
-    )
+    torch_rows = run_backend_subprocess(args, "torch", model_path)
+    wginfer_rows = run_backend_subprocess(args, "wginfer", model_path)
 
     print_report(cases, torch_rows, wginfer_rows)
 
