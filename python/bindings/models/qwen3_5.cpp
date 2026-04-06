@@ -37,6 +37,28 @@ public:
         model_->reset_cache();
     }
 
+    void set_weight(const std::string &name, const std::shared_ptr<PyTensor> &tensor) {
+        model_->setWeight(name, tensor->tensor());
+    }
+
+    void set_layer_weight(const std::string &name, size_t layer_idx, const std::shared_ptr<PyTensor> &tensor) {
+        model_->setLayerWeight(name, layer_idx, tensor->tensor());
+    }
+
+    int64_t infer(
+        const std::vector<int64_t> &token_ids,
+        int top_k,
+        float top_p,
+        float temperature) {
+        std::vector<int64_t> tokens = token_ids;
+        return model_->infer(tokens.data(), tokens.size(), top_k, top_p, temperature);
+    }
+
+    std::shared_ptr<PyTensor> forward_logits(const std::vector<int64_t> &token_ids) {
+        std::vector<int64_t> tokens = token_ids;
+        return std::make_shared<PyTensor>(model_->forwardLogits(tokens.data(), tokens.size()));
+    }
+
 private:
     std::unique_ptr<qwen3_5::Model> model_;
 };
@@ -68,7 +90,8 @@ void bind_qwen3_5(py::module_ &m) {
         .def_readwrite("linear_num_value_heads", &qwen3_5::ModelMeta::linear_num_value_heads)
         .def_readwrite("linear_key_head_dim", &qwen3_5::ModelMeta::linear_key_head_dim)
         .def_readwrite("linear_value_head_dim", &qwen3_5::ModelMeta::linear_value_head_dim)
-        .def_readwrite("linear_conv_kernel_dim", &qwen3_5::ModelMeta::linear_conv_kernel_dim);
+        .def_readwrite("linear_conv_kernel_dim", &qwen3_5::ModelMeta::linear_conv_kernel_dim)
+        .def_readwrite("partial_rotary_factor", &qwen3_5::ModelMeta::partial_rotary_factor);
 
     py::class_<PyQwen3_5Model>(m, "Qwen3_5Model")
         .def(
@@ -79,7 +102,17 @@ void bind_qwen3_5(py::module_ &m) {
             py::arg("device_id") = 0)
         .def("meta", &PyQwen3_5Model::meta, py::return_value_policy::reference_internal)
         .def("layer_types", &PyQwen3_5Model::layer_types, py::return_value_policy::reference_internal)
-        .def("reset_cache", &PyQwen3_5Model::reset_cache);
+        .def("reset_cache", &PyQwen3_5Model::reset_cache)
+        .def("set_weight", &PyQwen3_5Model::set_weight, py::arg("name"), py::arg("tensor"))
+        .def("set_layer_weight", &PyQwen3_5Model::set_layer_weight, py::arg("name"), py::arg("layer_idx"), py::arg("tensor"))
+        .def("forward_logits", &PyQwen3_5Model::forward_logits, py::arg("token_ids"))
+        .def(
+            "infer",
+            &PyQwen3_5Model::infer,
+            py::arg("token_ids"),
+            py::arg("top_k") = 1,
+            py::arg("top_p") = 1.0f,
+            py::arg("temperature") = 1.0f);
 }
 
 } // namespace wginfer::pybind
