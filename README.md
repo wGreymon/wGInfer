@@ -15,66 +15,109 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 
 ## Roadmap
 
+这部分不再只是“功能清单”，而是当前阶段的长期开发地图。整体原则如下：
+
+1. 当前只长期维护两条模型路线：`Qwen2` 与 `Qwen3.5`
+2. 先补 correctness 与主推理链路，再做服务化与调度优化
+3. 吸收工业推理框架（如 `vLLM`）在调度、缓存、服务引擎上的优点，但不盲目追求一次性铺开所有能力
+4. 当前阶段不以“继续接更多模型”或“推进多模态”作为重点
+
+优先级说明：
+
+- `P0`：当前阶段必须优先完成
+- `P1`：在主链稳定后尽快推进
+- `P2`：中长期方向，暂不抢占主线资源
+
 状态说明：
 
 - `✅` 已具备
 - `△` 部分具备，仍需补齐
-- `❌` 尚未开始
+- `❌` 尚未开始或当前未落地
 
-### Foundation Layer
+### 当前聚焦模型
 
-| Topic | Status | Code | Test | Notes |
-|---|---|---:|---:|---|
-| Runtime abstraction | ✅ | ✅ | ✅ | CPU / NVIDIA / MetaX runtime API |
-| Device memory management | ✅ | ✅ | ✅ | allocator 仍较基础 |
-| Tensor creation and metadata | ✅ | ✅ | ✅ | shape / strides / offset / storage |
-| Tensor view operations | △ | ✅ | ✅ | `view / permute / slice` 已完成 |
+当前阶段只计划长期维护和持续优化两条模型路径：
 
-### Operator Layer
+- `Qwen2`：以 [`deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B`](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B) 为主验证对象
+- `Qwen3.5`：以 `Qwen3.5-4B` 的 `text-only` 推理路径为主
 
-| Topic | Status | Code | Test | Notes |
-|---|---|---:|---:|---|
-| Add / Argmax / Embedding | ✅ | ✅ | ✅ | 基础算子已覆盖 |
-| Linear | ✅ | ✅ | ✅ | CPU 优化路径已具备 |
-| RMSNorm / RoPE / SwiGLU | ✅ | ✅ | ✅ | 已具备 Qwen2 所需能力 |
-| Self-Attention / GQA | ✅ | ✅ | ✅ | 已支持 Qwen2 注意力结构 |
-| Rearrange / advanced tensor ops | ❌ | ❌ | ❌ | 仍需补齐 |
+不再以“继续接更多模型”作为当前阶段重点，后续工作会主要围绕这两个模型展开。
 
-### Model Layer
+### 框架基础
 
-| Topic | Status | Code | Test | Notes |
-|---|---|---:|---:|---|
-| Qwen2 model loading | ✅ | ✅ | △ | safetensors -> internal weights |
-| Qwen2 forward inference | ✅ | ✅ | ✅ | 已可对齐 Transformers 输出 |
-| KV cache decoding | ✅ | ✅ | △ | 基础版已完成 |
-| Sampling | ✅ | ✅ | △ | greedy / top-k / top-p / temperature |
-| Qwen3.5 text-only support | △ | ✅ | △ | 已跑通 text-only，多步 token 可与 Transformers 对齐 |
-| Quantized model inference | ❌ | ❌ | ❌ | 面向 4B 模型的重点方向 |
-| Weight validation | ❌ | ❌ | ❌ | 建议加入模型完整性检查 |
+| Topic | Priority | Status | Notes |
+|---|---|---:|---|
+| Runtime abstraction | P0 | ✅ | CPU / NVIDIA / MetaX runtime API |
+| Tensor / Storage / Allocator | P0 | ✅ | 基础能力已具备，allocator 仍较朴素 |
+| Python bindings | P0 | ✅ | pybind11 接口已可用 |
+| 自动化测试体系 | P0 | △ | 已有基础测试，但服务侧、长序列与回归测试仍需补强 |
+| Memory reuse / workspace | P0 | △ | 模型内部已有部分复用，后续应继续系统化 |
+| Benchmark / CLI / Web / Chat Server | P1 | ✅ | 已具备从离线验证到本地服务的完整使用链路 |
+| Engine / Scheduler abstraction | P1 | ❌ | 后续可对齐 `vLLM` 风格的请求调度与执行引擎 |
+| Request state management | P1 | ❌ | 需要为多请求并发、暂停 / 恢复、流式输出维护统一状态 |
+| Continuous batching | P1 | ❌ | 服务化的重要能力，适合在主推理稳定后推进 |
+| Chunked prefill | P1 | ❌ | 长上下文场景的重要优化点 |
+| Async serving pipeline | P1 | ❌ | 后续服务引擎能力建设的一部分 |
+| Paged KV cache infrastructure | P2 | ❌ | 后续可对齐 `vLLM` 的 paged attention / paged cache 设计 |
+| Prefix cache / prompt reuse | P2 | ❌ | 适合在服务层引入，提高重复 prompt 的吞吐与时延表现 |
+| Quantized inference runtime support | P2 | ❌ | 后续需要支持量化模型加载、量化权重管理与量化执行路径 |
 
-### Serving Layer
+### 算子层
 
-| Topic | Status | Code | Test | Notes |
-|---|---|---:|---:|---|
-| Python bindings | ✅ | ✅ | △ | pybind11 接口已可用 |
-| Python high-level model API | ✅ | ✅ | △ | `wginfer.models.create_model` / `wginfer.models.Qwen2` / `wginfer.models.Qwen3_5` |
-| Benchmark scripts | ✅ | ✅ | △ | 已有吞吐对比脚本 |
-| CLI demo | ✅ | ✅ | ✅ | 可访问本地服务 |
-| Web demo | ✅ | ✅ | ✅ | 简单聊天界面 |
-| OpenAI-style chat server | ✅ | ✅ | ❌ | 仍缺自动化测试 |
+| Topic | Priority | Status | Notes |
+|---|---|---:|---|
+| Embedding / Linear / Add / Argmax | P0 | ✅ | 基础算子已可用 |
+| RMSNorm / RoPE / SwiGLU | P0 | ✅ | 已覆盖 Qwen2 主路径所需能力 |
+| Self-Attention / GQA | P0 | ✅ | 已支持标准 decoder-only attention 路径 |
+| Qwen3.5 相关算子 | P0 | △ | Linear-attention 路径已接入，仍有 correctness / 性能优化空间 |
+| CUDA kernel 持续优化 | P1 | △ | 现有实现可继续优化吞吐、访存与融合程度 |
+| Quantization format support | P1 | △ | 已接入第一版离线量化模块 |
+| Quantized linear kernels | P1 | ❌ | 建议优先做 `W4A16` |
+| Quantized inference operators | P2 | ❌ | 后续让量化权重直接参与计算，而不是仅在加载时反量化 |
+| 更高阶 fused ops | P2 | ❌ | 如 fused norm / fused attention path，可在主链稳定后评估 |
 
-### Optimization Layer
+### 模型层
 
-| Topic | Status | Code | Test | Notes |
-|---|---|---:|---:|---|
-| CPU linear optimization | ✅ | ✅ | ✅ | blocked / OpenBLAS 路径 |
-| CUDA operator kernels | △ | ✅ | △ | 已有基础实现，仍可继续优化 |
-| Memory reuse / workspace | △ | ✅ | ❌ | 模型内部已有部分复用 |
-| Quantized linear kernels | ❌ | ❌ | ❌ | 建议先做 `W4A16` |
-| KV cache optimization | △ | ✅ | ❌ | 还没有 paged / quant cache |
-| Continuous batching | ❌ | ❌ | ❌ | 服务化后重要能力 |
-| Chunked prefill | ❌ | ❌ | ❌ | 长上下文优化方向 |
-| Paged attention | ❌ | ❌ | ❌ | 更高阶推理优化 |
+#### Qwen2
+
+| Topic | Priority | Status | Notes |
+|---|---|---:|---|
+| Config 解析与权重加载 | P0 | ✅ | safetensors -> internal weights |
+| C++ 主推理路径 | P0 | ✅ | 已可稳定运行 |
+| Transformers 对齐 | P0 | ✅ | 已可稳定对齐输出 token |
+| KV cache decode | P0 | ✅ | 基础版已完成 |
+| Sampling | P0 | ✅ | greedy / top-k / top-p / temperature |
+| 性能优化 | P1 | △ | CPU / NVIDIA 路径可继续优化 |
+| 量化推理支持 | P2 | ❌ | 当前尚未支持真正的量化 Qwen2 推理路径 |
+
+#### Qwen3.5
+
+| Topic | Priority | Status | Notes |
+|---|---|---:|---|
+| Config 解析与层类型识别 | P0 | ✅ | 已支持 `linear_attention` / `full_attention` 混合结构 |
+| Text-only 推理接入 | P0 | ✅ | 已跑通主路径 |
+| C++ 主推理链路 | P0 | △ | 主路径已迁到 C++ backend，仍需继续打磨 |
+| Transformers 对齐 | P0 | △ | 当前主优先项，长序列 correctness 仍在优化 |
+| Cache / 状态管理 | P0 | △ | full-attention cache 与 linear-attention state 已接入 |
+| 性能优化 | P1 | △ | correctness 稳定后再进一步追吞吐与时延 |
+| 量化推理支持 | P2 | ❌ | 当前尚未支持真正的量化 Qwen3.5 推理路径 |
+| 多模态支持 | P2 | ❌ | 当前不在计划内，暂不推进 vision tower |
+
+### 当前开发重点（建议执行顺序）
+
+1. `Qwen3.5` 长序列 correctness 对齐
+2. `Qwen3.5` C++ backend 稳定性收敛
+3. 完善自动化测试与回归验证
+4. `Qwen2 / Qwen3.5` 主路径性能优化
+5. 引入服务引擎抽象、请求状态管理与 continuous batching
+6. 从“离线量化格式支持”推进到“量化线性算子”
+
+### 当前明确不做或暂缓
+
+- 接入更多模型家族
+- 推进 `Qwen3.5` vision tower / 多模态能力
+- 引入训练相关能力
+- 过早铺开所有高阶服务优化而忽略 correctness 主线
 
 ## MetaX Benchmark
 

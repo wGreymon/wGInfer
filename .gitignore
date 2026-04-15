@@ -4,6 +4,8 @@ interview/
 # 模型权重
 model.safetensors
 *.safetensors
+qwen2
+qwen3_5
 
 # 辅助脚本与 IDE/构建生成
 .clangd
