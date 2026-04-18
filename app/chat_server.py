@@ -25,9 +25,18 @@ if str(PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(PYTHON_SRC))
 
 import wginfer
-from test_utils import wginfer_device
 
 UI_HTML_PATH = Path(__file__).with_name("chat_web.html")
+
+
+def wginfer_device(device_name: str):
+    if device_name == "cpu":
+        return wginfer.core.DeviceType.CPU
+    if device_name == "nvidia":
+        return wginfer.core.DeviceType.NVIDIA
+    if device_name == "metax":
+        return wginfer.core.DeviceType.METAX
+    raise ValueError(f"Unsupported device name: {device_name}")
 
 
 def parse_message_content(content: Any) -> str:
