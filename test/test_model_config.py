@@ -174,12 +174,6 @@ def test_create_model_builds_qwen3_5_skeleton():
             "linear_attention": 1,
         }
         assert summary["vision_weights"] == 0
-        try:
-            model.generate([1, 2, 3])
-        except NotImplementedError as exc:
-            assert "not implemented yet" in str(exc)
-        else:
-            raise AssertionError("Qwen3.5 skeleton should not implement generation yet")
 
 
 if __name__ == "__main__":

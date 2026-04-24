@@ -365,6 +365,105 @@ tensor_t Model::hostI64ToTensor(const std::vector<int64_t> &values, const std::v
     return tensor;
 }
 
+tensor_t Model::runAttentionInputNorm(tensor_t x, size_t layer_idx) const {
+    const size_t seqlen = x->shape()[0];
+    tensor_t x_norm = makeTensor({seqlen, _meta.hs}, _meta.dtype);
+    ops::rms_norm(x_norm, x, _weights.attn_norm_w[layer_idx], _meta.epsilon);
+    return x_norm;
+}
+
+LinearProjectedTensors Model::projectLinearAttentionInputs(tensor_t x_norm, size_t seqlen, size_t layer_idx) const {
+    const size_t key_dim = _meta.linear_num_key_heads * _meta.linear_key_head_dim;
+    const size_t value_dim = _meta.linear_num_value_heads * _meta.linear_value_head_dim;
+    const size_t qkv_dim = key_dim * 2 + value_dim;
+
+    tensor_t qkv = makeTensor({seqlen, qkv_dim}, _meta.dtype);
+    tensor_t z = makeTensor({seqlen, value_dim}, _meta.dtype);
+    tensor_t a = makeTensor({seqlen, _meta.linear_num_value_heads}, _meta.dtype);
+    tensor_t b = makeTensor({seqlen, _meta.linear_num_value_heads}, _meta.dtype);
+    ops::linear(qkv, x_norm, _weights.linear_attn_qkv_w[layer_idx], nullptr);
+    ops::linear(z, x_norm, _weights.linear_attn_z_w[layer_idx], nullptr);
+    ops::linear(a, x_norm, _weights.linear_attn_a_w[layer_idx], nullptr);
+    ops::linear(b, x_norm, _weights.linear_attn_b_w[layer_idx], nullptr);
+    return {
+        qkv,
+        z,
+        a,
+        b,
+    };
+}
+
+FullProjectedTensors Model::projectFullAttentionInputs(tensor_t x_norm, size_t seqlen, size_t layer_idx) const {
+    tensor_t q_proj = makeTensor({seqlen, _meta.nh * _meta.dh * 2}, _meta.dtype);
+    tensor_t k_proj = makeTensor({seqlen, _meta.nkvh * _meta.dh}, _meta.dtype);
+    tensor_t v_proj = makeTensor({seqlen, _meta.nkvh * _meta.dh}, _meta.dtype);
+    ops::linear(q_proj, x_norm, _weights.full_attn_q_w[layer_idx], nullptr);
+    ops::linear(k_proj, x_norm, _weights.full_attn_k_w[layer_idx], nullptr);
+    ops::linear(v_proj, x_norm, _weights.full_attn_v_w[layer_idx], nullptr);
+    return {
+        q_proj,
+        k_proj,
+        v_proj,
+    };
+}
+
+FullAttentionPreparedTensors Model::prepareFullAttentionInputsFromHost(
+    const std::vector<float> &q_proj_host,
+    const std::vector<float> &k_proj_host,
+    const std::vector<float> &v_proj_host,
+    size_t seqlen,
+    size_t layer_idx,
+    size_t start_pos) const {
+    std::vector<float> q_host(seqlen * _meta.nh * _meta.dh, 0.0f);
+    std::vector<float> gate_flat(seqlen * _meta.nh * _meta.dh, 0.0f);
+    for (size_t seq = 0; seq < seqlen; ++seq) {
+        for (size_t head = 0; head < _meta.nh; ++head) {
+            const size_t src_base = (seq * _meta.nh + head) * (_meta.dh * 2);
+            const size_t dst_base = (seq * _meta.nh + head) * _meta.dh;
+            std::copy(
+                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base),
+                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + _meta.dh),
+                q_host.begin() + static_cast<ptrdiff_t>(dst_base));
+            std::copy(
+                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + _meta.dh),
+                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + 2 * _meta.dh),
+                gate_flat.begin() + static_cast<ptrdiff_t>(dst_base));
+        }
+    }
+
+    std::vector<float> k_host = k_proj_host;
+    std::vector<float> v_host = v_proj_host;
+
+    q_host = apply_rms_norm_with_repeated_delta_weight(
+        q_host,
+        seqlen * _meta.nh,
+        _meta.dh,
+        _full_q_norm_host[layer_idx],
+        _meta.epsilon);
+    k_host = apply_rms_norm_with_repeated_delta_weight(
+        k_host,
+        seqlen * _meta.nkvh,
+        _meta.dh,
+        _full_k_norm_host[layer_idx],
+        _meta.epsilon);
+
+    size_t rotary_dim = static_cast<size_t>(static_cast<float>(_meta.dh) * _meta.partial_rotary_factor);
+    rotary_dim -= rotary_dim % 2;
+    std::vector<int64_t> pos_ids(seqlen);
+    for (size_t i = 0; i < seqlen; ++i) {
+        pos_ids[i] = static_cast<int64_t>(start_pos + i);
+    }
+    apply_partial_rope_in_place(q_host, seqlen, _meta.nh, _meta.dh, pos_ids, _meta.theta, rotary_dim);
+    apply_partial_rope_in_place(k_host, seqlen, _meta.nkvh, _meta.dh, pos_ids, _meta.theta, rotary_dim);
+
+    return {
+        hostF32ToTensor(q_host, {seqlen, _meta.nh, _meta.dh}, _meta.dtype),
+        hostF32ToTensor(k_host, {seqlen, _meta.nkvh, _meta.dh}, _meta.dtype),
+        hostF32ToTensor(v_host, {seqlen, _meta.nkvh, _meta.dh}, _meta.dtype),
+        std::move(gate_flat),
+    };
+}
+
 void Model::cacheHostLayerWeight(size_t layer_idx, const std::string &name, tensor_t tensor) {
     if (name == "full_attn_q_norm_w") {
         _full_q_norm_host.at(layer_idx) = tensorToHostF32(std::move(tensor));
@@ -610,26 +709,15 @@ LinearPreparedTensors Model::prepareLinearInputsFromHost(
 
 tensor_t Model::prefillLinearAttentionLayer(tensor_t x, size_t layer_idx) {
     const size_t seqlen = x->shape()[0];
-    const size_t key_dim = _meta.linear_num_key_heads * _meta.linear_key_head_dim;
     const size_t value_dim = _meta.linear_num_value_heads * _meta.linear_value_head_dim;
-    const size_t qkv_dim = key_dim * 2 + value_dim;
+    tensor_t x_norm = runAttentionInputNorm(x, layer_idx);
+    LinearProjectedTensors projected = projectLinearAttentionInputs(x_norm, seqlen, layer_idx);
 
-    tensor_t x_norm = makeTensor({seqlen, _meta.hs}, _meta.dtype);
-    ops::rms_norm(x_norm, x, _weights.attn_norm_w[layer_idx], _meta.epsilon);
-
-    tensor_t qkv = makeTensor({seqlen, qkv_dim}, _meta.dtype);
-    tensor_t z = makeTensor({seqlen, value_dim}, _meta.dtype);
-    tensor_t a = makeTensor({seqlen, _meta.linear_num_value_heads}, _meta.dtype);
-    tensor_t b = makeTensor({seqlen, _meta.linear_num_value_heads}, _meta.dtype);
-    ops::linear(qkv, x_norm, _weights.linear_attn_qkv_w[layer_idx], nullptr);
-    ops::linear(z, x_norm, _weights.linear_attn_z_w[layer_idx], nullptr);
-    ops::linear(a, x_norm, _weights.linear_attn_a_w[layer_idx], nullptr);
-    ops::linear(b, x_norm, _weights.linear_attn_b_w[layer_idx], nullptr);
-
-    const std::vector<float> qkv_host = tensorToHostF32(qkv);
-    const std::vector<float> z_host = tensorToHostF32(z);
-    const std::vector<float> a_host = tensorToHostF32(a);
-    const std::vector<float> b_host = tensorToHostF32(b);
+    const std::vector<float> qkv_host = tensorToHostF32(projected.qkv);
+    const std::vector<float> z_host = tensorToHostF32(projected.z);
+    const std::vector<float> a_host = tensorToHostF32(projected.a);
+    const std::vector<float> b_host = tensorToHostF32(projected.b);
+    const size_t qkv_dim = projected.qkv->shape()[1];
     const std::vector<float> mixed_qkv_host = host_linear_conv(
         qkv_host,
         seqlen,
@@ -691,42 +779,19 @@ tensor_t Model::prefillLinearAttentionLayer(tensor_t x, size_t layer_idx) {
     tensor_t x_attn = makeTensor({seqlen, _meta.hs}, _meta.dtype);
     ops::add(x_attn, x, attn_proj);
 
-    tensor_t x_post = makeTensor({seqlen, _meta.hs}, _meta.dtype);
-    ops::rms_norm(x_post, x_attn, _weights.mlp_norm_w[layer_idx], _meta.epsilon);
-    tensor_t gate_proj = makeTensor({seqlen, _meta.di}, _meta.dtype);
-    tensor_t up_proj = makeTensor({seqlen, _meta.di}, _meta.dtype);
-    ops::linear(gate_proj, x_post, _weights.mlp_gate_w[layer_idx], nullptr);
-    ops::linear(up_proj, x_post, _weights.mlp_up_w[layer_idx], nullptr);
-    tensor_t swiglu = makeTensor({seqlen, _meta.di}, _meta.dtype);
-    ops::swiglu(swiglu, gate_proj, up_proj);
-    tensor_t mlp_out = makeTensor({seqlen, _meta.hs}, _meta.dtype);
-    ops::linear(mlp_out, swiglu, _weights.mlp_down_w[layer_idx], nullptr);
-    tensor_t x_mlp = makeTensor({seqlen, _meta.hs}, _meta.dtype);
-    ops::add(x_mlp, x_attn, mlp_out);
-    return x_mlp;
+    return x_attn;
 }
 
 tensor_t Model::decodeLinearAttentionLayer(tensor_t x, size_t layer_idx) {
-    const size_t key_dim = _meta.linear_num_key_heads * _meta.linear_key_head_dim;
     const size_t value_dim = _meta.linear_num_value_heads * _meta.linear_value_head_dim;
-    const size_t qkv_dim = key_dim * 2 + value_dim;
+    tensor_t x_norm = runAttentionInputNorm(x, layer_idx);
+    LinearProjectedTensors projected = projectLinearAttentionInputs(x_norm, 1, layer_idx);
 
-    tensor_t x_norm = makeTensor({1, _meta.hs}, _meta.dtype);
-    ops::rms_norm(x_norm, x, _weights.attn_norm_w[layer_idx], _meta.epsilon);
-
-    tensor_t qkv = makeTensor({1, qkv_dim}, _meta.dtype);
-    tensor_t z = makeTensor({1, value_dim}, _meta.dtype);
-    tensor_t a = makeTensor({1, _meta.linear_num_value_heads}, _meta.dtype);
-    tensor_t b = makeTensor({1, _meta.linear_num_value_heads}, _meta.dtype);
-    ops::linear(qkv, x_norm, _weights.linear_attn_qkv_w[layer_idx], nullptr);
-    ops::linear(z, x_norm, _weights.linear_attn_z_w[layer_idx], nullptr);
-    ops::linear(a, x_norm, _weights.linear_attn_a_w[layer_idx], nullptr);
-    ops::linear(b, x_norm, _weights.linear_attn_b_w[layer_idx], nullptr);
-
-    const std::vector<float> qkv_host = tensorToHostF32(qkv);
-    const std::vector<float> z_host = tensorToHostF32(z);
-    const std::vector<float> a_host = tensorToHostF32(a);
-    const std::vector<float> b_host = tensorToHostF32(b);
+    const std::vector<float> qkv_host = tensorToHostF32(projected.qkv);
+    const std::vector<float> z_host = tensorToHostF32(projected.z);
+    const std::vector<float> a_host = tensorToHostF32(projected.a);
+    const std::vector<float> b_host = tensorToHostF32(projected.b);
+    const size_t qkv_dim = projected.qkv->shape()[1];
     std::vector<float> combined_qkv = _linear_qkv_history[layer_idx];
     combined_qkv.insert(combined_qkv.end(), qkv_host.begin(), qkv_host.end());
     const size_t combined_rows = combined_qkv.size() / qkv_dim;
@@ -794,218 +859,76 @@ tensor_t Model::decodeLinearAttentionLayer(tensor_t x, size_t layer_idx) {
     tensor_t x_attn = makeTensor({1, _meta.hs}, _meta.dtype);
     ops::add(x_attn, x, attn_proj);
 
-    tensor_t x_post = makeTensor({1, _meta.hs}, _meta.dtype);
-    ops::rms_norm(x_post, x_attn, _weights.mlp_norm_w[layer_idx], _meta.epsilon);
-    tensor_t gate_proj = makeTensor({1, _meta.di}, _meta.dtype);
-    tensor_t up_proj = makeTensor({1, _meta.di}, _meta.dtype);
-    ops::linear(gate_proj, x_post, _weights.mlp_gate_w[layer_idx], nullptr);
-    ops::linear(up_proj, x_post, _weights.mlp_up_w[layer_idx], nullptr);
-    tensor_t swiglu = makeTensor({1, _meta.di}, _meta.dtype);
-    ops::swiglu(swiglu, gate_proj, up_proj);
-    tensor_t mlp_out = makeTensor({1, _meta.hs}, _meta.dtype);
-    ops::linear(mlp_out, swiglu, _weights.mlp_down_w[layer_idx], nullptr);
-    tensor_t x_mlp = makeTensor({1, _meta.hs}, _meta.dtype);
-    ops::add(x_mlp, x_attn, mlp_out);
-    return x_mlp;
+    return x_attn;
 }
 
 tensor_t Model::prefillFullAttentionLayer(tensor_t x, size_t layer_idx, size_t start_pos) {
     const size_t seqlen = x->shape()[0];
-    tensor_t x_norm = makeTensor({seqlen, _meta.hs}, _meta.dtype);
-    ops::rms_norm(x_norm, x, _weights.attn_norm_w[layer_idx], _meta.epsilon);
+    tensor_t x_norm = runAttentionInputNorm(x, layer_idx);
+    FullProjectedTensors projected = projectFullAttentionInputs(x_norm, seqlen, layer_idx);
 
-    tensor_t q_proj = makeTensor({seqlen, _meta.nh * _meta.dh * 2}, _meta.dtype);
-    tensor_t k_proj = makeTensor({seqlen, _meta.nkvh * _meta.dh}, _meta.dtype);
-    tensor_t v_proj = makeTensor({seqlen, _meta.nkvh * _meta.dh}, _meta.dtype);
-    ops::linear(q_proj, x_norm, _weights.full_attn_q_w[layer_idx], nullptr);
-    ops::linear(k_proj, x_norm, _weights.full_attn_k_w[layer_idx], nullptr);
-    ops::linear(v_proj, x_norm, _weights.full_attn_v_w[layer_idx], nullptr);
-
-    const std::vector<float> q_proj_host = tensorToHostF32(q_proj);
-    const std::vector<float> k_proj_host = tensorToHostF32(k_proj);
-    const std::vector<float> v_proj_host = tensorToHostF32(v_proj);
-
-    std::vector<float> q_host(seqlen * _meta.nh * _meta.dh, 0.0f);
-    std::vector<float> gate_flat(seqlen * _meta.nh * _meta.dh, 0.0f);
-    for (size_t seq = 0; seq < seqlen; ++seq) {
-        for (size_t head = 0; head < _meta.nh; ++head) {
-            const size_t src_base = (seq * _meta.nh + head) * (_meta.dh * 2);
-            const size_t dst_base = (seq * _meta.nh + head) * _meta.dh;
-            std::copy(
-                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base),
-                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + _meta.dh),
-                q_host.begin() + static_cast<ptrdiff_t>(dst_base));
-            std::copy(
-                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + _meta.dh),
-                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + 2 * _meta.dh),
-                gate_flat.begin() + static_cast<ptrdiff_t>(dst_base));
-        }
-    }
-    std::vector<float> k_host = k_proj_host;
-    std::vector<float> v_host = v_proj_host;
-
-    q_host = apply_rms_norm_with_repeated_delta_weight(
-        q_host,
-        seqlen * _meta.nh,
-        _meta.dh,
-        _full_q_norm_host[layer_idx],
-        _meta.epsilon);
-    k_host = apply_rms_norm_with_repeated_delta_weight(
-        k_host,
-        seqlen * _meta.nkvh,
-        _meta.dh,
-        _full_k_norm_host[layer_idx],
-        _meta.epsilon);
-
-    size_t rotary_dim = static_cast<size_t>(static_cast<float>(_meta.dh) * _meta.partial_rotary_factor);
-    rotary_dim -= rotary_dim % 2;
-    std::vector<int64_t> pos_ids(seqlen);
-    for (size_t i = 0; i < seqlen; ++i) {
-        pos_ids[i] = static_cast<int64_t>(start_pos + i);
-    }
-    apply_partial_rope_in_place(q_host, seqlen, _meta.nh, _meta.dh, pos_ids, _meta.theta, rotary_dim);
-    apply_partial_rope_in_place(k_host, seqlen, _meta.nkvh, _meta.dh, pos_ids, _meta.theta, rotary_dim);
-
-    tensor_t q_ready = hostF32ToTensor(q_host, {seqlen, _meta.nh, _meta.dh}, _meta.dtype);
-    tensor_t k_ready = hostF32ToTensor(k_host, {seqlen, _meta.nkvh, _meta.dh}, _meta.dtype);
-    tensor_t v_ready = hostF32ToTensor(v_host, {seqlen, _meta.nkvh, _meta.dh}, _meta.dtype);
+    const std::vector<float> q_proj_host = tensorToHostF32(projected.q_proj);
+    const std::vector<float> k_proj_host = tensorToHostF32(projected.k_proj);
+    const std::vector<float> v_proj_host = tensorToHostF32(projected.v_proj);
+    FullAttentionPreparedTensors prepared = prepareFullAttentionInputsFromHost(
+        q_proj_host,
+        k_proj_host,
+        v_proj_host,
+        seqlen,
+        layer_idx,
+        start_pos);
     if (!_full_k_cache[layer_idx]) {
         _full_k_cache[layer_idx] = makeTensor({_meta.maxseq, _meta.nkvh, _meta.dh}, _meta.dtype);
         _full_v_cache[layer_idx] = makeTensor({_meta.maxseq, _meta.nkvh, _meta.dh}, _meta.dtype);
     }
-    appendToCache(_full_k_cache[layer_idx], k_ready, start_pos);
-    appendToCache(_full_v_cache[layer_idx], v_ready, start_pos);
+    appendToCache(_full_k_cache[layer_idx], prepared.k, start_pos);
+    appendToCache(_full_v_cache[layer_idx], prepared.v, start_pos);
 
     tensor_t attn_out = makeTensor({seqlen, _meta.nh, _meta.dh}, _meta.dtype);
-    ops::self_attention(attn_out, q_ready, k_ready, v_ready, std::pow(static_cast<float>(_meta.dh), -0.5f));
+    ops::self_attention(attn_out, prepared.q, prepared.k, prepared.v, std::pow(static_cast<float>(_meta.dh), -0.5f));
     tensor_t attn_flat = attn_out->view({seqlen, _meta.nh * _meta.dh});
-    std::vector<float> attn_flat_host = tensorToHostF32(attn_flat);
-    for (size_t i = 0; i < attn_flat_host.size(); ++i) {
-        attn_flat_host[i] *= 1.0f / (1.0f + std::exp(-gate_flat[i]));
-    }
-    tensor_t gated_attn = hostF32ToTensor(attn_flat_host, {seqlen, _meta.nh * _meta.dh}, _meta.dtype);
+    tensor_t gated_attn = applyFullAttentionGate(attn_flat, prepared.gate, seqlen);
 
     tensor_t attn_proj = makeTensor({seqlen, _meta.hs}, _meta.dtype);
     ops::linear(attn_proj, gated_attn, _weights.full_attn_o_w[layer_idx], nullptr);
     tensor_t x_attn = makeTensor({seqlen, _meta.hs}, _meta.dtype);
     ops::add(x_attn, x, attn_proj);
 
-    tensor_t x_post = makeTensor({seqlen, _meta.hs}, _meta.dtype);
-    ops::rms_norm(x_post, x_attn, _weights.mlp_norm_w[layer_idx], _meta.epsilon);
-    tensor_t gate_proj = makeTensor({seqlen, _meta.di}, _meta.dtype);
-    tensor_t up_proj = makeTensor({seqlen, _meta.di}, _meta.dtype);
-    ops::linear(gate_proj, x_post, _weights.mlp_gate_w[layer_idx], nullptr);
-    ops::linear(up_proj, x_post, _weights.mlp_up_w[layer_idx], nullptr);
-    tensor_t swiglu = makeTensor({seqlen, _meta.di}, _meta.dtype);
-    ops::swiglu(swiglu, gate_proj, up_proj);
-    tensor_t mlp_out = makeTensor({seqlen, _meta.hs}, _meta.dtype);
-    ops::linear(mlp_out, swiglu, _weights.mlp_down_w[layer_idx], nullptr);
-    tensor_t x_mlp = makeTensor({seqlen, _meta.hs}, _meta.dtype);
-    ops::add(x_mlp, x_attn, mlp_out);
-    return x_mlp;
+    return x_attn;
 }
 
 tensor_t Model::decodeFullAttentionLayer(tensor_t x, size_t layer_idx, size_t start_pos) {
-    tensor_t x_norm = makeTensor({1, _meta.hs}, _meta.dtype);
-    ops::rms_norm(x_norm, x, _weights.attn_norm_w[layer_idx], _meta.epsilon);
+    tensor_t x_norm = runAttentionInputNorm(x, layer_idx);
+    FullProjectedTensors projected = projectFullAttentionInputs(x_norm, 1, layer_idx);
 
-    tensor_t q_proj = makeTensor({1, _meta.nh * _meta.dh * 2}, _meta.dtype);
-    tensor_t k_proj = makeTensor({1, _meta.nkvh * _meta.dh}, _meta.dtype);
-    tensor_t v_proj = makeTensor({1, _meta.nkvh * _meta.dh}, _meta.dtype);
-    ops::linear(q_proj, x_norm, _weights.full_attn_q_w[layer_idx], nullptr);
-    ops::linear(k_proj, x_norm, _weights.full_attn_k_w[layer_idx], nullptr);
-    ops::linear(v_proj, x_norm, _weights.full_attn_v_w[layer_idx], nullptr);
-
-    const std::vector<float> q_proj_host = tensorToHostF32(q_proj);
-    const std::vector<float> k_proj_host = tensorToHostF32(k_proj);
-    const std::vector<float> v_proj_host = tensorToHostF32(v_proj);
-
-    std::vector<float> q_host(_meta.nh * _meta.dh, 0.0f);
-    std::vector<float> gate_flat(_meta.nh * _meta.dh, 0.0f);
-    for (size_t head = 0; head < _meta.nh; ++head) {
-        const size_t src_base = head * (_meta.dh * 2);
-        const size_t dst_base = head * _meta.dh;
-        std::copy(
-            q_proj_host.begin() + static_cast<ptrdiff_t>(src_base),
-            q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + _meta.dh),
-            q_host.begin() + static_cast<ptrdiff_t>(dst_base));
-        std::copy(
-            q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + _meta.dh),
-            q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + 2 * _meta.dh),
-            gate_flat.begin() + static_cast<ptrdiff_t>(dst_base));
-    }
-    std::vector<float> k_host = k_proj_host;
-    std::vector<float> v_host = v_proj_host;
-
-    q_host = apply_rms_norm_with_repeated_delta_weight(
-        q_host,
-        _meta.nh,
-        _meta.dh,
-        _full_q_norm_host[layer_idx],
-        _meta.epsilon);
-    k_host = apply_rms_norm_with_repeated_delta_weight(
-        k_host,
-        _meta.nkvh,
-        _meta.dh,
-        _full_k_norm_host[layer_idx],
-        _meta.epsilon);
-
-    size_t rotary_dim = static_cast<size_t>(static_cast<float>(_meta.dh) * _meta.partial_rotary_factor);
-    rotary_dim -= rotary_dim % 2;
-    apply_partial_rope_in_place(
-        q_host,
+    const std::vector<float> q_proj_host = tensorToHostF32(projected.q_proj);
+    const std::vector<float> k_proj_host = tensorToHostF32(projected.k_proj);
+    const std::vector<float> v_proj_host = tensorToHostF32(projected.v_proj);
+    FullAttentionPreparedTensors prepared = prepareFullAttentionInputsFromHost(
+        q_proj_host,
+        k_proj_host,
+        v_proj_host,
         1,
-        _meta.nh,
-        _meta.dh,
-        {static_cast<int64_t>(start_pos)},
-        _meta.theta,
-        rotary_dim);
-    apply_partial_rope_in_place(
-        k_host,
-        1,
-        _meta.nkvh,
-        _meta.dh,
-        {static_cast<int64_t>(start_pos)},
-        _meta.theta,
-        rotary_dim);
-
-    tensor_t q_ready = hostF32ToTensor(q_host, {1, _meta.nh, _meta.dh}, _meta.dtype);
-    tensor_t k_new = hostF32ToTensor(k_host, {1, _meta.nkvh, _meta.dh}, _meta.dtype);
-    tensor_t v_new = hostF32ToTensor(v_host, {1, _meta.nkvh, _meta.dh}, _meta.dtype);
+        layer_idx,
+        start_pos);
     ASSERT(_full_k_cache[layer_idx] != nullptr && _full_v_cache[layer_idx] != nullptr,
            "decodeFullAttentionLayer: missing full-attention cache");
-    appendToCache(_full_k_cache[layer_idx], k_new, start_pos);
-    appendToCache(_full_v_cache[layer_idx], v_new, start_pos);
+    appendToCache(_full_k_cache[layer_idx], prepared.k, start_pos);
+    appendToCache(_full_v_cache[layer_idx], prepared.v, start_pos);
 
     tensor_t k_ready = _full_k_cache[layer_idx]->slice(0, 0, start_pos + 1);
     tensor_t v_ready = _full_v_cache[layer_idx]->slice(0, 0, start_pos + 1);
     tensor_t attn_out = makeTensor({1, _meta.nh, _meta.dh}, _meta.dtype);
-    ops::self_attention(attn_out, q_ready, k_ready, v_ready, std::pow(static_cast<float>(_meta.dh), -0.5f));
+    ops::self_attention(attn_out, prepared.q, k_ready, v_ready, std::pow(static_cast<float>(_meta.dh), -0.5f));
     tensor_t attn_flat = attn_out->view({1, _meta.nh * _meta.dh});
-    std::vector<float> attn_flat_host = tensorToHostF32(attn_flat);
-    for (size_t i = 0; i < attn_flat_host.size(); ++i) {
-        attn_flat_host[i] *= 1.0f / (1.0f + std::exp(-gate_flat[i]));
-    }
-    tensor_t gated_attn = hostF32ToTensor(attn_flat_host, {1, _meta.nh * _meta.dh}, _meta.dtype);
+    tensor_t gated_attn = applyFullAttentionGate(attn_flat, prepared.gate, 1);
 
     tensor_t attn_proj = makeTensor({1, _meta.hs}, _meta.dtype);
     ops::linear(attn_proj, gated_attn, _weights.full_attn_o_w[layer_idx], nullptr);
     tensor_t x_attn = makeTensor({1, _meta.hs}, _meta.dtype);
     ops::add(x_attn, x, attn_proj);
 
-    tensor_t x_post = makeTensor({1, _meta.hs}, _meta.dtype);
-    ops::rms_norm(x_post, x_attn, _weights.mlp_norm_w[layer_idx], _meta.epsilon);
-    tensor_t gate_proj = makeTensor({1, _meta.di}, _meta.dtype);
-    tensor_t up_proj = makeTensor({1, _meta.di}, _meta.dtype);
-    ops::linear(gate_proj, x_post, _weights.mlp_gate_w[layer_idx], nullptr);
-    ops::linear(up_proj, x_post, _weights.mlp_up_w[layer_idx], nullptr);
-    tensor_t swiglu = makeTensor({1, _meta.di}, _meta.dtype);
-    ops::swiglu(swiglu, gate_proj, up_proj);
-    tensor_t mlp_out = makeTensor({1, _meta.hs}, _meta.dtype);
-    ops::linear(mlp_out, swiglu, _weights.mlp_down_w[layer_idx], nullptr);
-    tensor_t x_mlp = makeTensor({1, _meta.hs}, _meta.dtype);
-    ops::add(x_mlp, x_attn, mlp_out);
-    return x_mlp;
+    return x_attn;
 }
 
 tensor_t Model::finalLogitsFromHidden(tensor_t hidden, size_t seqlen) const {
@@ -1017,19 +940,54 @@ tensor_t Model::finalLogitsFromHidden(tensor_t hidden, size_t seqlen) const {
     return logits;
 }
 
+tensor_t Model::applyFullAttentionGate(tensor_t attn_flat, const std::vector<float> &gate, size_t seqlen) const {
+    std::vector<float> attn_flat_host = tensorToHostF32(attn_flat);
+    ASSERT(attn_flat_host.size() == gate.size(), "applyFullAttentionGate: gate size mismatch");
+    for (size_t i = 0; i < attn_flat_host.size(); ++i) {
+        attn_flat_host[i] *= 1.0f / (1.0f + std::exp(-gate[i]));
+    }
+    return hostF32ToTensor(attn_flat_host, {seqlen, _meta.nh * _meta.dh}, _meta.dtype);
+}
+
+tensor_t Model::runMLPBlock(tensor_t x, size_t layer_idx) const {
+    const size_t seqlen = x->shape()[0];
+    tensor_t x_post = makeTensor({seqlen, _meta.hs}, _meta.dtype);
+    ops::rms_norm(x_post, x, _weights.mlp_norm_w[layer_idx], _meta.epsilon);
+
+    tensor_t gate_proj = makeTensor({seqlen, _meta.di}, _meta.dtype);
+    tensor_t up_proj = makeTensor({seqlen, _meta.di}, _meta.dtype);
+    ops::linear(gate_proj, x_post, _weights.mlp_gate_w[layer_idx], nullptr);
+    ops::linear(up_proj, x_post, _weights.mlp_up_w[layer_idx], nullptr);
+
+    tensor_t swiglu = makeTensor({seqlen, _meta.di}, _meta.dtype);
+    ops::swiglu(swiglu, gate_proj, up_proj);
+    tensor_t mlp_out = makeTensor({seqlen, _meta.hs}, _meta.dtype);
+    ops::linear(mlp_out, swiglu, _weights.mlp_down_w[layer_idx], nullptr);
+
+    tensor_t x_mlp = makeTensor({seqlen, _meta.hs}, _meta.dtype);
+    ops::add(x_mlp, x, mlp_out);
+    return x_mlp;
+}
+
 tensor_t Model::prefillLogits(const int64_t *token_ids, size_t ntoken) {
     tensor_t input_ids = makeTensor({ntoken}, WGINFER_DTYPE_I64);
     input_ids->load(token_ids);
     tensor_t x = makeTensor({ntoken, _meta.hs}, _meta.dtype);
     ops::embedding(x, input_ids, _weights.in_embed);
     for (size_t i = 0; i < _meta.nlayer; ++i) {
-        if (_layer_types[i] == LayerType::LinearAttention) {
-            x = prefillLinearAttentionLayer(x, i);
-        } else {
-            x = prefillFullAttentionLayer(x, i, 0);
-        }
+        x = prefillDecoderLayer(x, i, 0);
     }
     return finalLogitsFromHidden(x, ntoken);
+}
+
+tensor_t Model::prefillDecoderLayer(tensor_t x, size_t layer_idx, size_t start_pos) {
+    tensor_t attn_out;
+    if (_layer_types[layer_idx] == LayerType::LinearAttention) {
+        attn_out = prefillLinearAttentionLayer(x, layer_idx);
+    } else {
+        attn_out = prefillFullAttentionLayer(x, layer_idx, start_pos);
+    }
+    return runMLPBlock(attn_out, layer_idx);
 }
 
 tensor_t Model::decodeOneTokenLogits(int64_t token_id) {
@@ -1038,13 +996,19 @@ tensor_t Model::decodeOneTokenLogits(int64_t token_id) {
     tensor_t x = makeTensor({1, _meta.hs}, _meta.dtype);
     ops::embedding(x, input_ids, _weights.in_embed);
     for (size_t i = 0; i < _meta.nlayer; ++i) {
-        if (_layer_types[i] == LayerType::LinearAttention) {
-            x = decodeLinearAttentionLayer(x, i);
-        } else {
-            x = decodeFullAttentionLayer(x, i, _cache_len);
-        }
+        x = decodeDecoderLayer(x, i, _cache_len);
     }
     return finalLogitsFromHidden(x, 1);
+}
+
+tensor_t Model::decodeDecoderLayer(tensor_t x, size_t layer_idx, size_t start_pos) {
+    tensor_t attn_out;
+    if (_layer_types[layer_idx] == LayerType::LinearAttention) {
+        attn_out = decodeLinearAttentionLayer(x, layer_idx);
+    } else {
+        attn_out = decodeFullAttentionLayer(x, layer_idx, start_pos);
+    }
+    return runMLPBlock(attn_out, layer_idx);
 }
 
 int64_t Model::greedyNextToken(tensor_t logits) const {

@@ -238,7 +238,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cpu", choices=["cpu", "nvidia", "metax"], type=str)
     parser.add_argument("--model", default=None, type=str)
-    parser.add_argument("--model-type", default="qwen2", choices=wginfer.models.supported_model_types(), type=str)
+    parser.add_argument("--model-type", default="qwen2", choices=wginfer.models.supported_model_types(), type=str) #qwen2, qwen3_5
     parser.add_argument("--prompt", default="Who are you?", type=str)
     parser.add_argument("--max_steps", default=128, type=int)
     parser.add_argument("--top_p", default=1.0, type=float)

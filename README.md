@@ -15,7 +15,7 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 
 ## Roadmap
 
-这部分不再只是“功能清单”，而是当前阶段的长期开发地图。整体原则如下：
+这是对框架功能的概述，也是当前阶段的长期开发地图。整体原则如下：
 
 1. 当前只长期维护两条模型路线：`Qwen2` 与 `Qwen3.5`
 2. 先补 correctness 与主推理链路，再做服务化与调度优化
@@ -57,8 +57,8 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 | Request state management | P1 | ❌ | 需要为多请求并发、暂停 / 恢复、流式输出维护统一状态 |
 | Continuous batching | P1 | ❌ | 服务化的重要能力，适合在主推理稳定后推进 |
 | Chunked prefill | P1 | ❌ | 长上下文场景的重要优化点 |
-| Async serving pipeline | P1 | ❌ | 后续服务引擎能力建设的一部分 |
-| Paged KV cache infrastructure | P2 | ❌ | 后续可对齐 `vLLM` 的 paged attention / paged cache 设计 |
+| 多用户Async服务 | P1 | ❌ | 后续服务引擎能力建设的一部分 |
+| Paged Attention | P2 | ❌ | 后续可对齐 `vLLM` 的 paged attention / paged cache 设计 |
 | Prefix cache / prompt reuse | P2 | ❌ | 适合在服务层引入，提高重复 prompt 的吞吐与时延表现 |
 | Quantized inference runtime support | P2 | ❌ | 后续需要支持量化模型加载、量化权重管理与量化执行路径 |
 
@@ -103,7 +103,7 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 | 量化推理支持 | P2 | ❌ | 当前尚未支持真正的量化 Qwen3.5 推理路径 |
 | 多模态支持 | P2 | ❌ | 当前不在计划内，暂不推进 vision tower |
 
-### 当前开发重点（建议执行顺序）
+### 当前开发重点
 
 1. `Qwen3.5` 长序列 correctness 对齐
 2. `Qwen3.5` C++ backend 稳定性收敛
@@ -112,7 +112,7 @@ wGInfer 是一个面向大模型推理场景的多平台、多模型推理框架
 5. 引入服务引擎抽象、请求状态管理与 continuous batching
 6. 从“离线量化格式支持”推进到“量化线性算子”
 
-### 当前明确不做或暂缓
+### 当前不做或暂缓
 
 - 接入更多模型家族
 - 推进 `Qwen3.5` vision tower / 多模态能力

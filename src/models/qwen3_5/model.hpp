@@ -85,6 +85,26 @@ struct LinearPreparedTensors {
     tensor_t beta;
 };
 
+struct LinearProjectedTensors {
+    tensor_t qkv;
+    tensor_t z;
+    tensor_t a;
+    tensor_t b;
+};
+
+struct FullProjectedTensors {
+    tensor_t q_proj;
+    tensor_t k_proj;
+    tensor_t v_proj;
+};
+
+struct FullAttentionPreparedTensors {
+    tensor_t q;
+    tensor_t k;
+    tensor_t v;
+    std::vector<float> gate;
+};
+
 class Model {
 private:
     ModelMeta _meta;
@@ -112,6 +132,16 @@ private:
         const std::vector<size_t> &shape,
         wginferDataType_t dtype) const;
     tensor_t hostI64ToTensor(const std::vector<int64_t> &values, const std::vector<size_t> &shape) const;
+    tensor_t runAttentionInputNorm(tensor_t x, size_t layer_idx) const;
+    LinearProjectedTensors projectLinearAttentionInputs(tensor_t x_norm, size_t seqlen, size_t layer_idx) const;
+    FullProjectedTensors projectFullAttentionInputs(tensor_t x_norm, size_t seqlen, size_t layer_idx) const;
+    FullAttentionPreparedTensors prepareFullAttentionInputsFromHost(
+        const std::vector<float> &q_proj_host,
+        const std::vector<float> &k_proj_host,
+        const std::vector<float> &v_proj_host,
+        size_t seqlen,
+        size_t layer_idx,
+        size_t start_pos) const;
     LinearPreparedTensors prepareLinearInputsFromHost(
         const std::vector<float> &mixed_qkv_host,
         const std::vector<float> &z_host,
@@ -123,6 +153,10 @@ private:
     void cacheHostLayerWeight(size_t layer_idx, const std::string &name, tensor_t tensor);
     void appendToCache(tensor_t cache, tensor_t values, size_t start_pos) const;
     tensor_t finalLogitsFromHidden(tensor_t hidden, size_t seqlen) const;
+    tensor_t applyFullAttentionGate(tensor_t attn_flat, const std::vector<float> &gate, size_t seqlen) const;
+    tensor_t runMLPBlock(tensor_t x, size_t layer_idx) const;
+    tensor_t prefillDecoderLayer(tensor_t x, size_t layer_idx, size_t start_pos);
+    tensor_t decodeDecoderLayer(tensor_t x, size_t layer_idx, size_t start_pos);
 
     tensor_t prefillLinearAttentionLayer(tensor_t x, size_t layer_idx);
     tensor_t decodeLinearAttentionLayer(tensor_t x, size_t layer_idx);

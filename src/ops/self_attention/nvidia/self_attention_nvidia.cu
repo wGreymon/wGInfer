@@ -181,7 +181,6 @@ static void launch_flash_attention(std::byte *attn_val,
                                    size_t total_len,
                                    float scale) {
     // Keep shared-memory usage below common 48KB limits for larger head dimensions
-    // such as Qwen3.5 full-attention layers (head_dim=256).
     constexpr int block_q = 4;
     constexpr int block_kv = 8;
     constexpr int block_size = 128;
