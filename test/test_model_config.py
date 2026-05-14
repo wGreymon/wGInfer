@@ -10,6 +10,7 @@ from wginfer.models.qwen2 import ensure_qwen2_compatible
 from wginfer.models.qwen2 import is_qwen2_config
 from wginfer.models.qwen3_5 import Qwen3_5
 from wginfer.models.qwen3_5 import is_qwen3_5_config
+from wginfer.models.qwen3_5 import parse_qwen3_5_text_meta
 from wginfer.models.registry import create_model
 from wginfer.models.registry import get_model_class
 from wginfer.models.registry import supported_model_types
@@ -55,6 +56,50 @@ def test_nested_text_config_and_rope_parameters():
     assert is_qwen2_config(view) is False
     assert is_qwen3_5_config(view) is True
     assert rope_theta_from_text_config(view.text_config) == 10000000.0
+
+
+def test_qwen3_5_derives_layer_types_from_interval():
+    meta = parse_qwen3_5_text_meta(
+        {
+            "num_hidden_layers": 8,
+            "hidden_size": 4096,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 4,
+            "head_dim": 256,
+            "full_attention_interval": 4,
+            "eos_token_id": [151645, 151643],
+        }
+    )
+
+    assert meta.layer_types == (
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+    )
+    assert meta.full_attention_interval == 4
+    assert meta.partial_rotary_factor == 0.25
+    assert meta.end_token == 151645
+
+
+def test_qwen3_5_rejects_bad_layer_types_length():
+    try:
+        parse_qwen3_5_text_meta(
+            {
+                "num_hidden_layers": 2,
+                "hidden_size": 4096,
+                "num_attention_heads": 16,
+                "layer_types": ["linear_attention"],
+            }
+        )
+    except UnsupportedModelConfigError as exc:
+        assert "layer_types length" in str(exc)
+    else:
+        raise AssertionError("Invalid Qwen3.5 layer_types length should be rejected")
 
 
 def test_reject_qwen3_5_for_qwen2_loader():
@@ -179,6 +224,8 @@ def test_create_model_builds_qwen3_5_skeleton():
 if __name__ == "__main__":
     test_qwen2_compatible_config()
     test_nested_text_config_and_rope_parameters()
+    test_qwen3_5_derives_layer_types_from_interval()
+    test_qwen3_5_rejects_bad_layer_types_length()
     test_reject_qwen3_5_for_qwen2_loader()
     test_real_qwen3_5_config_file()
     test_registry_supports_explicit_model_types()

@@ -162,6 +162,8 @@ def run_backend_only(args):
         )
         elapsed = time.time() - start_time
         print(RESULT_JSON_PREFIX + json.dumps(build_result_payload("wginfer", model_path, tokens, output, elapsed), ensure_ascii=False))
+        del model
+        import gc; gc.collect()
         return
 
     raise ValueError(f"Unknown backend_only value: {args.backend_only}")

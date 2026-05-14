@@ -118,119 +118,6 @@ int64_t sample_from_logits(
     return static_cast<int64_t>(indices[static_cast<size_t>(chosen)]);
 }
 
-std::vector<float> host_linear_conv(
-    const std::vector<float> &in,
-    size_t seqlen,
-    size_t channels,
-    size_t kernel_size,
-    const std::vector<float> &weight) {
-    std::vector<float> out(seqlen * channels, 0.0f);
-    for (size_t seq = 0; seq < seqlen; ++seq) {
-        for (size_t c = 0; c < channels; ++c) {
-            float acc = 0.0f;
-            for (size_t k = 0; k < kernel_size; ++k) {
-                const size_t input_seq = seq + k;
-                if (input_seq >= kernel_size - 1 && (input_seq - (kernel_size - 1)) < seqlen) {
-                    const size_t src_seq = input_seq - (kernel_size - 1);
-                    acc += in[src_seq * channels + c] * weight[c * kernel_size + k];
-                }
-            }
-            out[seq * channels + c] = acc / (1.0f + std::exp(-acc));
-        }
-    }
-    return out;
-}
-
-void normalize_l2_rows(std::vector<float> &data, size_t rows, size_t cols, float eps, float scale) {
-    for (size_t row = 0; row < rows; ++row) {
-        float sum_sq = 0.0f;
-        for (size_t col = 0; col < cols; ++col) {
-            const float v = data[row * cols + col];
-            sum_sq += v * v;
-        }
-        const float norm = std::sqrt(sum_sq);
-        const float inv_norm = scale / std::max(norm, eps);
-        for (size_t col = 0; col < cols; ++col) {
-            data[row * cols + col] *= inv_norm;
-        }
-    }
-}
-
-std::vector<float> apply_rms_norm_with_repeated_delta_weight(
-    const std::vector<float> &in,
-    size_t rows,
-    size_t cols,
-    const std::vector<float> &weight_delta,
-    float eps) {
-    CHECK_ARGUMENT(weight_delta.size() == cols, "apply_rms_norm_with_repeated_delta_weight: weight size mismatch");
-    std::vector<float> out(in.size(), 0.0f);
-    for (size_t row = 0; row < rows; ++row) {
-        float variance = 0.0f;
-        for (size_t col = 0; col < cols; ++col) {
-            const float v = in[row * cols + col];
-            variance += v * v;
-        }
-        variance /= static_cast<float>(cols);
-        const float inv_std = 1.0f / std::sqrt(variance + eps);
-        for (size_t col = 0; col < cols; ++col) {
-            out[row * cols + col] =
-                in[row * cols + col] * inv_std * (weight_delta[col] + 1.0f);
-        }
-    }
-    return out;
-}
-
-void apply_partial_rope_in_place(
-    std::vector<float> &data,
-    size_t seqlen,
-    size_t nhead,
-    size_t head_dim,
-    const std::vector<int64_t> &pos_ids,
-    float theta,
-    size_t rotary_dim) {
-    if (rotary_dim == 0) {
-        return;
-    }
-    const size_t half = rotary_dim / 2;
-    for (size_t seq = 0; seq < seqlen; ++seq) {
-        const float pos = static_cast<float>(pos_ids[seq]);
-        for (size_t head = 0; head < nhead; ++head) {
-            const size_t base = (seq * nhead + head) * head_dim;
-            for (size_t j = 0; j < half; ++j) {
-                const float exponent = (2.0f * static_cast<float>(j)) / static_cast<float>(rotary_dim);
-                const float phi = pos / std::pow(theta, exponent);
-                const float sinv = std::sin(phi);
-                const float cosv = std::cos(phi);
-                const float a = data[base + j];
-                const float b = data[base + j + half];
-                data[base + j] = a * cosv - b * sinv;
-                data[base + j + half] = b * cosv + a * sinv;
-            }
-        }
-    }
-}
-
-std::vector<float> repeat_heads(
-    const std::vector<float> &in,
-    size_t seqlen,
-    size_t src_heads,
-    size_t dst_heads,
-    size_t head_dim) {
-    CHECK_ARGUMENT(dst_heads % src_heads == 0, "repeat_heads: dst_heads must be divisible by src_heads");
-    const size_t repeat_factor = dst_heads / src_heads;
-    std::vector<float> out(seqlen * dst_heads * head_dim, 0.0f);
-    for (size_t seq = 0; seq < seqlen; ++seq) {
-        for (size_t head = 0; head < src_heads; ++head) {
-            const float *src = &in[(seq * src_heads + head) * head_dim];
-            for (size_t rep = 0; rep < repeat_factor; ++rep) {
-                float *dst = &out[(seq * dst_heads + head * repeat_factor + rep) * head_dim];
-                std::copy(src, src + head_dim, dst);
-            }
-        }
-    }
-    return out;
-}
-
 } // namespace
 
 Model::Model(
@@ -246,12 +133,8 @@ Model::Model(
       _full_k_cache(meta.nlayer),
       _full_v_cache(meta.nlayer),
       _linear_recurrent_state(meta.nlayer),
-      _linear_qkv_history(meta.nlayer),
-      _full_q_norm_host(meta.nlayer),
-      _full_k_norm_host(meta.nlayer),
-      _linear_a_log_host(meta.nlayer),
-      _linear_dt_bias_host(meta.nlayer),
-      _linear_conv_host(meta.nlayer) {
+      _linear_qkv_history_gpu(meta.nlayer),
+      _linear_qkv_history_rows(meta.nlayer, 0) {
     CHECK_ARGUMENT(_meta.nlayer == _layer_types.size(), "Qwen3.5 layer_types size must match nlayer");
     for (LayerType layer_type : _layer_types) {
         CHECK_ARGUMENT(is_supported_layer_type(layer_type), "Qwen3.5 layer_types contains an unsupported value");
@@ -407,86 +290,6 @@ FullProjectedTensors Model::projectFullAttentionInputs(tensor_t x_norm, size_t s
     };
 }
 
-FullAttentionPreparedTensors Model::prepareFullAttentionInputsFromHost(
-    const std::vector<float> &q_proj_host,
-    const std::vector<float> &k_proj_host,
-    const std::vector<float> &v_proj_host,
-    size_t seqlen,
-    size_t layer_idx,
-    size_t start_pos) const {
-    std::vector<float> q_host(seqlen * _meta.nh * _meta.dh, 0.0f);
-    std::vector<float> gate_flat(seqlen * _meta.nh * _meta.dh, 0.0f);
-    for (size_t seq = 0; seq < seqlen; ++seq) {
-        for (size_t head = 0; head < _meta.nh; ++head) {
-            const size_t src_base = (seq * _meta.nh + head) * (_meta.dh * 2);
-            const size_t dst_base = (seq * _meta.nh + head) * _meta.dh;
-            std::copy(
-                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base),
-                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + _meta.dh),
-                q_host.begin() + static_cast<ptrdiff_t>(dst_base));
-            std::copy(
-                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + _meta.dh),
-                q_proj_host.begin() + static_cast<ptrdiff_t>(src_base + 2 * _meta.dh),
-                gate_flat.begin() + static_cast<ptrdiff_t>(dst_base));
-        }
-    }
-
-    std::vector<float> k_host = k_proj_host;
-    std::vector<float> v_host = v_proj_host;
-
-    q_host = apply_rms_norm_with_repeated_delta_weight(
-        q_host,
-        seqlen * _meta.nh,
-        _meta.dh,
-        _full_q_norm_host[layer_idx],
-        _meta.epsilon);
-    k_host = apply_rms_norm_with_repeated_delta_weight(
-        k_host,
-        seqlen * _meta.nkvh,
-        _meta.dh,
-        _full_k_norm_host[layer_idx],
-        _meta.epsilon);
-
-    size_t rotary_dim = static_cast<size_t>(static_cast<float>(_meta.dh) * _meta.partial_rotary_factor);
-    rotary_dim -= rotary_dim % 2;
-    std::vector<int64_t> pos_ids(seqlen);
-    for (size_t i = 0; i < seqlen; ++i) {
-        pos_ids[i] = static_cast<int64_t>(start_pos + i);
-    }
-    apply_partial_rope_in_place(q_host, seqlen, _meta.nh, _meta.dh, pos_ids, _meta.theta, rotary_dim);
-    apply_partial_rope_in_place(k_host, seqlen, _meta.nkvh, _meta.dh, pos_ids, _meta.theta, rotary_dim);
-
-    return {
-        hostF32ToTensor(q_host, {seqlen, _meta.nh, _meta.dh}, _meta.dtype),
-        hostF32ToTensor(k_host, {seqlen, _meta.nkvh, _meta.dh}, _meta.dtype),
-        hostF32ToTensor(v_host, {seqlen, _meta.nkvh, _meta.dh}, _meta.dtype),
-        std::move(gate_flat),
-    };
-}
-
-void Model::cacheHostLayerWeight(size_t layer_idx, const std::string &name, tensor_t tensor) {
-    if (name == "full_attn_q_norm_w") {
-        _full_q_norm_host.at(layer_idx) = tensorToHostF32(std::move(tensor));
-        return;
-    }
-    if (name == "full_attn_k_norm_w") {
-        _full_k_norm_host.at(layer_idx) = tensorToHostF32(std::move(tensor));
-        return;
-    }
-    if (name == "linear_attn_a_log") {
-        _linear_a_log_host.at(layer_idx) = tensorToHostF32(std::move(tensor));
-        return;
-    }
-    if (name == "linear_attn_dt_bias") {
-        _linear_dt_bias_host.at(layer_idx) = tensorToHostF32(std::move(tensor));
-        return;
-    }
-    if (name == "linear_attn_conv_w") {
-        _linear_conv_host.at(layer_idx) = tensorToHostF32(std::move(tensor));
-        return;
-    }
-}
-
 const ModelMeta &Model::meta() const {
     return _meta;
 }
@@ -575,16 +378,21 @@ void Model::setLayerWeight(const std::string &name, size_t layer_idx, tensor_t t
     } else {
         throw std::invalid_argument("Unknown per-layer Qwen3.5 weight: " + name);
     }
-
-    cacheHostLayerWeight(layer_idx, name, tensor);
 }
 
 void Model::reset_cache() {
     _cache_len = 0;
     for (size_t i = 0; i < _meta.nlayer; ++i) {
-        _linear_qkv_history[i].clear();
+        _linear_qkv_history_gpu[i] = nullptr;
+        _linear_qkv_history_rows[i] = 0;
         _linear_recurrent_state[i] = nullptr;
     }
+}
+
+Model::~Model() {
+    reset_cache();
+    for (auto &t : _full_k_cache) t = nullptr;
+    for (auto &t : _full_v_cache) t = nullptr;
 }
 
 tensor_t Model::forwardLogits(int64_t *token_ids, size_t ntoken) {
@@ -616,94 +424,46 @@ void Model::appendToCache(tensor_t cache, tensor_t values, size_t start_pos) con
         (_device_type == WGINFER_DEVICE_CPU) ? WGINFER_MEMCPY_H2H : WGINFER_MEMCPY_D2D);
 }
 
-LinearPreparedTensors Model::prepareLinearInputsFromHost(
-    const std::vector<float> &mixed_qkv_host,
-    const std::vector<float> &z_host,
-    const std::vector<float> &a_host,
-    const std::vector<float> &b_host,
+LinearPreparedTensors Model::prepareLinearInputs(
+    tensor_t mixed_qkv,
+    tensor_t z,
+    tensor_t a,
+    tensor_t b,
     size_t seqlen,
     size_t layer_idx) const {
     const ModelMeta &meta = _meta;
-    const size_t key_dim = meta.linear_num_key_heads * meta.linear_key_head_dim;
-    const size_t value_dim = meta.linear_num_value_heads * meta.linear_value_head_dim;
-    const size_t qkv_dim = key_dim * 2 + value_dim;
-
-    std::vector<float> q(seqlen * meta.linear_num_key_heads * meta.linear_key_head_dim, 0.0f);
-    std::vector<float> k(seqlen * meta.linear_num_key_heads * meta.linear_key_head_dim, 0.0f);
-    std::vector<float> v(seqlen * meta.linear_num_value_heads * meta.linear_value_head_dim, 0.0f);
-    std::vector<float> z = z_host;
-
-    for (size_t seq = 0; seq < seqlen; ++seq) {
-        const float *src = &mixed_qkv_host[seq * qkv_dim];
-        std::copy(src, src + key_dim, &q[seq * key_dim]);
-        std::copy(src + key_dim, src + 2 * key_dim, &k[seq * key_dim]);
-        std::copy(src + 2 * key_dim, src + qkv_dim, &v[seq * value_dim]);
-    }
-
-    normalize_l2_rows(q, seqlen * meta.linear_num_key_heads, meta.linear_key_head_dim, 1e-6f, meta.linear_key_head_dim == 0 ? 1.0f : std::pow(static_cast<float>(meta.linear_key_head_dim), -0.5f));
-    normalize_l2_rows(k, seqlen * meta.linear_num_key_heads, meta.linear_key_head_dim, 1e-6f, 1.0f);
-
-    std::vector<float> q_repeated = repeat_heads(
+    tensor_t q = makeTensor({seqlen, meta.linear_num_value_heads, meta.linear_key_head_dim}, meta.dtype);
+    tensor_t k = makeTensor({seqlen, meta.linear_num_value_heads, meta.linear_key_head_dim}, meta.dtype);
+    tensor_t v = makeTensor({seqlen, meta.linear_num_value_heads, meta.linear_value_head_dim}, meta.dtype);
+    const float q_scale = meta.linear_key_head_dim == 0
+        ? 1.0f
+        : std::pow(static_cast<float>(meta.linear_key_head_dim), -0.5f);
+    ops::linear_attn_qkv_prepare(
         q,
-        seqlen,
-        meta.linear_num_key_heads,
-        meta.linear_num_value_heads,
-        meta.linear_key_head_dim);
-    std::vector<float> k_repeated = repeat_heads(
         k,
-        seqlen,
+        v,
+        mixed_qkv,
         meta.linear_num_key_heads,
-        meta.linear_num_value_heads,
-        meta.linear_key_head_dim);
+        1e-6f,
+        q_scale);
 
-    const std::vector<float> &a_log = _linear_a_log_host.at(layer_idx);
-    const std::vector<float> &dt_bias = _linear_dt_bias_host.at(layer_idx);
-    std::vector<float> g(seqlen * meta.linear_num_value_heads, 0.0f);
-    std::vector<float> beta(seqlen * meta.linear_num_value_heads, 0.0f);
-    for (size_t seq = 0; seq < seqlen; ++seq) {
-        for (size_t head = 0; head < meta.linear_num_value_heads; ++head) {
-            const size_t idx = seq * meta.linear_num_value_heads + head;
-            const float a_val = a_host[idx];
-            const float b_val = b_host[idx];
-            float softplus = 0.0f;
-            const float shifted = a_val + dt_bias[head];
-            if (shifted > 20.0f) {
-                softplus = shifted;
-            } else if (shifted < -20.0f) {
-                softplus = std::exp(shifted);
-            } else {
-                softplus = std::log1p(std::exp(shifted));
-            }
-            g[idx] = -std::exp(a_log[head]) * softplus;
-            beta[idx] = 1.0f / (1.0f + std::exp(-b_val));
-        }
-    }
+    tensor_t g = makeTensor({seqlen, meta.linear_num_value_heads}, WGINFER_DTYPE_F32);
+    tensor_t beta = makeTensor({seqlen, meta.linear_num_value_heads}, WGINFER_DTYPE_F32);
+    ops::linear_attn_gates(
+        g,
+        beta,
+        a,
+        b,
+        _weights.linear_attn_a_log[layer_idx],
+        _weights.linear_attn_dt_bias[layer_idx]);
 
     return {
-        hostF32ToTensor(
-            q_repeated,
-            {seqlen, meta.linear_num_value_heads, meta.linear_key_head_dim},
-            meta.dtype),
-        hostF32ToTensor(
-            k_repeated,
-            {seqlen, meta.linear_num_value_heads, meta.linear_key_head_dim},
-            meta.dtype),
-        hostF32ToTensor(
-            v,
-            {seqlen, meta.linear_num_value_heads, meta.linear_value_head_dim},
-            meta.dtype),
-        hostF32ToTensor(
-            z,
-            {seqlen * meta.linear_num_value_heads, meta.linear_value_head_dim},
-            meta.dtype),
-        hostF32ToTensor(
-            g,
-            {seqlen, meta.linear_num_value_heads},
-            meta.dtype),
-        hostF32ToTensor(
-            beta,
-            {seqlen, meta.linear_num_value_heads},
-            meta.dtype),
+        q,
+        k,
+        v,
+        z->view({seqlen * meta.linear_num_value_heads, meta.linear_value_head_dim}),
+        g,
+        beta,
     };
 }
 
@@ -713,23 +473,16 @@ tensor_t Model::prefillLinearAttentionLayer(tensor_t x, size_t layer_idx) {
     tensor_t x_norm = runAttentionInputNorm(x, layer_idx);
     LinearProjectedTensors projected = projectLinearAttentionInputs(x_norm, seqlen, layer_idx);
 
-    const std::vector<float> qkv_host = tensorToHostF32(projected.qkv);
-    const std::vector<float> z_host = tensorToHostF32(projected.z);
-    const std::vector<float> a_host = tensorToHostF32(projected.a);
-    const std::vector<float> b_host = tensorToHostF32(projected.b);
     const size_t qkv_dim = projected.qkv->shape()[1];
-    const std::vector<float> mixed_qkv_host = host_linear_conv(
-        qkv_host,
-        seqlen,
-        qkv_dim,
-        _meta.linear_conv_kernel_dim,
-        _linear_conv_host[layer_idx]);
+    const size_t elem_size = projected.qkv->elementSize();
+    tensor_t mixed_qkv = makeTensor({seqlen, qkv_dim}, _meta.dtype);
+    ops::causal_conv1d(mixed_qkv, projected.qkv, _weights.linear_attn_conv_w[layer_idx]);
 
-    LinearPreparedTensors prepared = prepareLinearInputsFromHost(
-        mixed_qkv_host,
-        z_host,
-        a_host,
-        b_host,
+    LinearPreparedTensors prepared = prepareLinearInputs(
+        mixed_qkv,
+        projected.z,
+        projected.a,
+        projected.b,
         seqlen,
         layer_idx);
 
@@ -738,7 +491,7 @@ tensor_t Model::prefillLinearAttentionLayer(tensor_t x, size_t layer_idx) {
         _meta.dtype);
     tensor_t final_state = makeTensor(
         {_meta.linear_num_value_heads, _meta.linear_key_head_dim, _meta.linear_value_head_dim},
-        _meta.dtype);
+        WGINFER_DTYPE_F32);
     ops::linear_attention(
         core_attn,
         prepared.q,
@@ -749,15 +502,26 @@ tensor_t Model::prefillLinearAttentionLayer(tensor_t x, size_t layer_idx) {
         nullptr,
         final_state);
 
+    // Save last K-1 rows of QKV on GPU for decode
     const size_t keep = (_meta.linear_conv_kernel_dim > 0) ? (_meta.linear_conv_kernel_dim - 1) : 0;
-    std::vector<float> &history = _linear_qkv_history[layer_idx];
-    if (keep == 0) {
-        history.clear();
-    } else {
+    if (keep > 0) {
         const size_t rows_to_keep = std::min(keep, seqlen);
-        history.assign(
-            qkv_host.end() - static_cast<ptrdiff_t>(rows_to_keep * qkv_dim),
-            qkv_host.end());
+        tensor_t history_slice = projected.qkv->slice(0, seqlen - rows_to_keep, seqlen);
+        if (!_linear_qkv_history_gpu[layer_idx] ||
+            _linear_qkv_history_gpu[layer_idx]->shape()[0] != rows_to_keep) {
+            _linear_qkv_history_gpu[layer_idx] = makeTensor({rows_to_keep, qkv_dim}, _meta.dtype);
+        }
+        wginfer::core::context().setDevice(_device_type, _device_id);
+        const WginferRuntimeAPI *api = wginfer::core::context().runtime().api();
+        api->memcpy_sync(
+            _linear_qkv_history_gpu[layer_idx]->data(),
+            history_slice->data(),
+            history_slice->numel() * elem_size,
+            (_device_type == WGINFER_DEVICE_CPU) ? WGINFER_MEMCPY_H2H : WGINFER_MEMCPY_D2D);
+        _linear_qkv_history_rows[layer_idx] = rows_to_keep;
+    } else {
+        _linear_qkv_history_gpu[layer_idx] = nullptr;
+        _linear_qkv_history_rows[layer_idx] = 0;
     }
     _linear_recurrent_state[layer_idx] = final_state;
 
@@ -787,36 +551,52 @@ tensor_t Model::decodeLinearAttentionLayer(tensor_t x, size_t layer_idx) {
     tensor_t x_norm = runAttentionInputNorm(x, layer_idx);
     LinearProjectedTensors projected = projectLinearAttentionInputs(x_norm, 1, layer_idx);
 
-    const std::vector<float> qkv_host = tensorToHostF32(projected.qkv);
-    const std::vector<float> z_host = tensorToHostF32(projected.z);
-    const std::vector<float> a_host = tensorToHostF32(projected.a);
-    const std::vector<float> b_host = tensorToHostF32(projected.b);
     const size_t qkv_dim = projected.qkv->shape()[1];
-    std::vector<float> combined_qkv = _linear_qkv_history[layer_idx];
-    combined_qkv.insert(combined_qkv.end(), qkv_host.begin(), qkv_host.end());
-    const size_t combined_rows = combined_qkv.size() / qkv_dim;
-    const std::vector<float> mixed_qkv_host = host_linear_conv(
-        combined_qkv,
-        combined_rows,
-        qkv_dim,
-        _meta.linear_conv_kernel_dim,
-        _linear_conv_host[layer_idx]);
-    std::vector<float> last_mixed_qkv(
-        mixed_qkv_host.end() - static_cast<ptrdiff_t>(qkv_dim),
-        mixed_qkv_host.end());
+    const size_t elem_size = projected.qkv->elementSize();
+    const size_t keep = (_meta.linear_conv_kernel_dim > 0) ? (_meta.linear_conv_kernel_dim - 1) : 0;
 
-    LinearPreparedTensors prepared = prepareLinearInputsFromHost(
+    // Build combined QKV tensor on device: [history_rows + 1, qkv_dim]
+    const size_t history_rows = _linear_qkv_history_rows[layer_idx];
+    const size_t total_rows = history_rows + 1;
+    tensor_t combined_qkv = makeTensor({total_rows, qkv_dim}, _meta.dtype);
+
+    wginfer::core::context().setDevice(_device_type, _device_id);
+    const WginferRuntimeAPI *api = wginfer::core::context().runtime().api();
+    const wginferMemcpyKind_t copy_kind =
+        (_device_type == WGINFER_DEVICE_CPU) ? WGINFER_MEMCPY_H2H : WGINFER_MEMCPY_D2D;
+
+    // Copy history to beginning of combined buffer
+    if (history_rows > 0 && _linear_qkv_history_gpu[layer_idx]) {
+        api->memcpy_sync(
+            combined_qkv->data(),
+            _linear_qkv_history_gpu[layer_idx]->data(),
+            history_rows * qkv_dim * elem_size,
+            copy_kind);
+    }
+    // Copy current qkv to last slot
+    api->memcpy_sync(
+        static_cast<std::byte *>(combined_qkv->data()) + history_rows * qkv_dim * elem_size,
+        projected.qkv->data(),
+        qkv_dim * elem_size,
+        copy_kind);
+
+    // Run causal_conv1d on the combined buffer and take last output
+    tensor_t mixed_qkv = makeTensor({total_rows, qkv_dim}, _meta.dtype);
+    ops::causal_conv1d(mixed_qkv, combined_qkv, _weights.linear_attn_conv_w[layer_idx]);
+    tensor_t last_mixed_qkv = mixed_qkv->slice(0, total_rows - 1, total_rows);
+
+    LinearPreparedTensors prepared = prepareLinearInputs(
         last_mixed_qkv,
-        z_host,
-        a_host,
-        b_host,
+        projected.z,
+        projected.a,
+        projected.b,
         1,
         layer_idx);
 
     ASSERT(_linear_recurrent_state[layer_idx] != nullptr, "decodeLinearAttentionLayer: missing recurrent state");
     tensor_t final_state = makeTensor(
         {_meta.linear_num_value_heads, _meta.linear_key_head_dim, _meta.linear_value_head_dim},
-        _meta.dtype);
+        WGINFER_DTYPE_F32);
     tensor_t core_attn = makeTensor(
         {1, _meta.linear_num_value_heads, _meta.linear_value_head_dim},
         _meta.dtype);
@@ -830,14 +610,23 @@ tensor_t Model::decodeLinearAttentionLayer(tensor_t x, size_t layer_idx) {
         _linear_recurrent_state[layer_idx],
         final_state);
 
-    const size_t keep = (_meta.linear_conv_kernel_dim > 0) ? (_meta.linear_conv_kernel_dim - 1) : 0;
-    if (keep == 0) {
-        _linear_qkv_history[layer_idx].clear();
+    // Update GPU history: save last K-1 rows of input qkv
+    if (keep > 0) {
+        const size_t rows_to_keep = std::min(keep, total_rows);
+        tensor_t src_slice = combined_qkv->slice(0, total_rows - rows_to_keep, total_rows);
+        if (!_linear_qkv_history_gpu[layer_idx] ||
+            _linear_qkv_history_gpu[layer_idx]->shape()[0] != rows_to_keep) {
+            _linear_qkv_history_gpu[layer_idx] = makeTensor({rows_to_keep, qkv_dim}, _meta.dtype);
+        }
+        api->memcpy_sync(
+            _linear_qkv_history_gpu[layer_idx]->data(),
+            src_slice->data(),
+            rows_to_keep * qkv_dim * elem_size,
+            copy_kind);
+        _linear_qkv_history_rows[layer_idx] = rows_to_keep;
     } else {
-        const size_t rows_to_keep = std::min(keep, combined_rows);
-        _linear_qkv_history[layer_idx].assign(
-            combined_qkv.end() - static_cast<ptrdiff_t>(rows_to_keep * qkv_dim),
-            combined_qkv.end());
+        _linear_qkv_history_gpu[layer_idx] = nullptr;
+        _linear_qkv_history_rows[layer_idx] = 0;
     }
     _linear_recurrent_state[layer_idx] = final_state;
 
@@ -867,28 +656,71 @@ tensor_t Model::prefillFullAttentionLayer(tensor_t x, size_t layer_idx, size_t s
     tensor_t x_norm = runAttentionInputNorm(x, layer_idx);
     FullProjectedTensors projected = projectFullAttentionInputs(x_norm, seqlen, layer_idx);
 
+    // q_proj layout: [seqlen, nh * dh * 2] with interleaved [Q_per_head, gate_per_head]
+    // Split on host (data is small: ~86KB for 14 tokens), then norm/rope on GPU
     const std::vector<float> q_proj_host = tensorToHostF32(projected.q_proj);
-    const std::vector<float> k_proj_host = tensorToHostF32(projected.k_proj);
-    const std::vector<float> v_proj_host = tensorToHostF32(projected.v_proj);
-    FullAttentionPreparedTensors prepared = prepareFullAttentionInputsFromHost(
-        q_proj_host,
-        k_proj_host,
-        v_proj_host,
-        seqlen,
-        layer_idx,
-        start_pos);
+    const size_t nh_dh = _meta.nh * _meta.dh;
+    std::vector<float> q_host(seqlen * nh_dh), gate_host(seqlen * nh_dh);
+    for (size_t seq = 0; seq < seqlen; ++seq) {
+        for (size_t h = 0; h < _meta.nh; ++h) {
+            const size_t src_off = (seq * _meta.nh + h) * _meta.dh * 2;
+            const size_t dst_off = (seq * _meta.nh + h) * _meta.dh;
+            std::copy_n(q_proj_host.data() + src_off, _meta.dh, q_host.data() + dst_off);
+            std::copy_n(q_proj_host.data() + src_off + _meta.dh, _meta.dh, gate_host.data() + dst_off);
+        }
+    }
+    tensor_t q_raw = hostF32ToTensor(q_host, {seqlen * _meta.nh, _meta.dh}, _meta.dtype);
+    tensor_t gate = hostF32ToTensor(gate_host, {seqlen, _meta.nh * _meta.dh}, _meta.dtype);
+
+    // Q norm on GPU
+    tensor_t q_norm = makeTensor({seqlen * _meta.nh, _meta.dh}, _meta.dtype);
+    ops::rms_norm(q_norm, q_raw, _weights.full_attn_q_norm_w[layer_idx], _meta.epsilon);
+
+    // K norm on GPU (k_proj is already contiguous)
+    tensor_t k_norm = makeTensor({seqlen * _meta.nkvh, _meta.dh}, _meta.dtype);
+    ops::rms_norm(k_norm, projected.k_proj->view({seqlen * _meta.nkvh, _meta.dh}),
+                  _weights.full_attn_k_norm_w[layer_idx], _meta.epsilon);
+
+    // V: raw projection, just reshape
+    tensor_t v = projected.v_proj->view({seqlen, _meta.nkvh, _meta.dh});
+
+    // Partial RoPE on GPU
+    const size_t rotary_dim = static_cast<size_t>(_meta.dh * _meta.partial_rotary_factor) & ~1ULL;
+    tensor_t q = q_norm->view({seqlen, _meta.nh, _meta.dh});
+    tensor_t k = k_norm->view({seqlen, _meta.nkvh, _meta.dh});
+
+    if (rotary_dim > 0) {
+        tensor_t pos_ids = makeTensor({seqlen}, WGINFER_DTYPE_I64);
+        {
+            std::vector<int64_t> host_pos(seqlen);
+            for (size_t i = 0; i < seqlen; ++i) host_pos[i] = static_cast<int64_t>(start_pos + i);
+            pos_ids->load(host_pos.data());
+        }
+        tensor_t q_rope = makeTensor({seqlen, _meta.nh, _meta.dh}, _meta.dtype);
+        tensor_t k_rope = makeTensor({seqlen, _meta.nkvh, _meta.dh}, _meta.dtype);
+        ops::rope_partial(q_rope, q, pos_ids, _meta.theta, rotary_dim);
+        ops::rope_partial(k_rope, k, pos_ids, _meta.theta, rotary_dim);
+        q = q_rope;
+        k = k_rope;
+    }
+
+    // KV cache
     if (!_full_k_cache[layer_idx]) {
         _full_k_cache[layer_idx] = makeTensor({_meta.maxseq, _meta.nkvh, _meta.dh}, _meta.dtype);
         _full_v_cache[layer_idx] = makeTensor({_meta.maxseq, _meta.nkvh, _meta.dh}, _meta.dtype);
     }
-    appendToCache(_full_k_cache[layer_idx], prepared.k, start_pos);
-    appendToCache(_full_v_cache[layer_idx], prepared.v, start_pos);
+    appendToCache(_full_k_cache[layer_idx], k, start_pos);
+    appendToCache(_full_v_cache[layer_idx], v, start_pos);
 
+    // Self attention
     tensor_t attn_out = makeTensor({seqlen, _meta.nh, _meta.dh}, _meta.dtype);
-    ops::self_attention(attn_out, prepared.q, prepared.k, prepared.v, std::pow(static_cast<float>(_meta.dh), -0.5f));
-    tensor_t attn_flat = attn_out->view({seqlen, _meta.nh * _meta.dh});
-    tensor_t gated_attn = applyFullAttentionGate(attn_flat, prepared.gate, seqlen);
+    ops::self_attention(attn_out, q, k, v, std::pow(static_cast<float>(_meta.dh), -0.5f));
 
+    // Gate (mul_sigmoid)
+    tensor_t attn_flat = attn_out->view({seqlen, _meta.nh * _meta.dh});
+    tensor_t gated_attn = applyFullAttentionGate(attn_flat, gate, seqlen);
+
+    // Output projection + residual
     tensor_t attn_proj = makeTensor({seqlen, _meta.hs}, _meta.dtype);
     ops::linear(attn_proj, gated_attn, _weights.full_attn_o_w[layer_idx], nullptr);
     tensor_t x_attn = makeTensor({seqlen, _meta.hs}, _meta.dtype);
@@ -901,28 +733,62 @@ tensor_t Model::decodeFullAttentionLayer(tensor_t x, size_t layer_idx, size_t st
     tensor_t x_norm = runAttentionInputNorm(x, layer_idx);
     FullProjectedTensors projected = projectFullAttentionInputs(x_norm, 1, layer_idx);
 
+    // Split Q and gate on host (tiny data: 1 token)
     const std::vector<float> q_proj_host = tensorToHostF32(projected.q_proj);
-    const std::vector<float> k_proj_host = tensorToHostF32(projected.k_proj);
-    const std::vector<float> v_proj_host = tensorToHostF32(projected.v_proj);
-    FullAttentionPreparedTensors prepared = prepareFullAttentionInputsFromHost(
-        q_proj_host,
-        k_proj_host,
-        v_proj_host,
-        1,
-        layer_idx,
-        start_pos);
+    const size_t nh_dh = _meta.nh * _meta.dh;
+    std::vector<float> q_host(nh_dh), gate_host(nh_dh);
+    for (size_t h = 0; h < _meta.nh; ++h) {
+        std::copy_n(q_proj_host.data() + h * _meta.dh * 2, _meta.dh, q_host.data() + h * _meta.dh);
+        std::copy_n(q_proj_host.data() + h * _meta.dh * 2 + _meta.dh, _meta.dh, gate_host.data() + h * _meta.dh);
+    }
+    tensor_t q_raw = hostF32ToTensor(q_host, {_meta.nh, _meta.dh}, _meta.dtype);
+    tensor_t gate = hostF32ToTensor(gate_host, {1, _meta.nh * _meta.dh}, _meta.dtype);
+
+    // Q norm on GPU
+    tensor_t q_norm = makeTensor({_meta.nh, _meta.dh}, _meta.dtype);
+    ops::rms_norm(q_norm, q_raw, _weights.full_attn_q_norm_w[layer_idx], _meta.epsilon);
+    tensor_t q = q_norm->view({1, _meta.nh, _meta.dh});
+
+    // K norm on GPU
+    tensor_t k_norm = makeTensor({_meta.nkvh, _meta.dh}, _meta.dtype);
+    ops::rms_norm(k_norm, projected.k_proj->view({_meta.nkvh, _meta.dh}),
+                  _weights.full_attn_k_norm_w[layer_idx], _meta.epsilon);
+    tensor_t k = k_norm->view({1, _meta.nkvh, _meta.dh});
+
+    // V: raw
+    tensor_t v = projected.v_proj->view({1, _meta.nkvh, _meta.dh});
+
+    // Partial RoPE on GPU
+    const size_t rotary_dim = static_cast<size_t>(_meta.dh * _meta.partial_rotary_factor) & ~1ULL;
+    if (rotary_dim > 0) {
+        tensor_t pos_ids = makeTensor({1}, WGINFER_DTYPE_I64);
+        int64_t host_pos = static_cast<int64_t>(start_pos);
+        pos_ids->load(&host_pos);
+        tensor_t q_rope = makeTensor({1, _meta.nh, _meta.dh}, _meta.dtype);
+        tensor_t k_rope = makeTensor({1, _meta.nkvh, _meta.dh}, _meta.dtype);
+        ops::rope_partial(q_rope, q, pos_ids, _meta.theta, rotary_dim);
+        ops::rope_partial(k_rope, k, pos_ids, _meta.theta, rotary_dim);
+        q = q_rope;
+        k = k_rope;
+    }
+
+    // KV cache
     ASSERT(_full_k_cache[layer_idx] != nullptr && _full_v_cache[layer_idx] != nullptr,
            "decodeFullAttentionLayer: missing full-attention cache");
-    appendToCache(_full_k_cache[layer_idx], prepared.k, start_pos);
-    appendToCache(_full_v_cache[layer_idx], prepared.v, start_pos);
+    appendToCache(_full_k_cache[layer_idx], k, start_pos);
+    appendToCache(_full_v_cache[layer_idx], v, start_pos);
 
+    // Self attention with full cache
     tensor_t k_ready = _full_k_cache[layer_idx]->slice(0, 0, start_pos + 1);
     tensor_t v_ready = _full_v_cache[layer_idx]->slice(0, 0, start_pos + 1);
     tensor_t attn_out = makeTensor({1, _meta.nh, _meta.dh}, _meta.dtype);
-    ops::self_attention(attn_out, prepared.q, k_ready, v_ready, std::pow(static_cast<float>(_meta.dh), -0.5f));
-    tensor_t attn_flat = attn_out->view({1, _meta.nh * _meta.dh});
-    tensor_t gated_attn = applyFullAttentionGate(attn_flat, prepared.gate, 1);
+    ops::self_attention(attn_out, q, k_ready, v_ready, std::pow(static_cast<float>(_meta.dh), -0.5f));
 
+    // Gate
+    tensor_t attn_flat = attn_out->view({1, _meta.nh * _meta.dh});
+    tensor_t gated_attn = applyFullAttentionGate(attn_flat, gate, 1);
+
+    // Output projection + residual
     tensor_t attn_proj = makeTensor({1, _meta.hs}, _meta.dtype);
     ops::linear(attn_proj, gated_attn, _weights.full_attn_o_w[layer_idx], nullptr);
     tensor_t x_attn = makeTensor({1, _meta.hs}, _meta.dtype);
@@ -940,13 +806,10 @@ tensor_t Model::finalLogitsFromHidden(tensor_t hidden, size_t seqlen) const {
     return logits;
 }
 
-tensor_t Model::applyFullAttentionGate(tensor_t attn_flat, const std::vector<float> &gate, size_t seqlen) const {
-    std::vector<float> attn_flat_host = tensorToHostF32(attn_flat);
-    ASSERT(attn_flat_host.size() == gate.size(), "applyFullAttentionGate: gate size mismatch");
-    for (size_t i = 0; i < attn_flat_host.size(); ++i) {
-        attn_flat_host[i] *= 1.0f / (1.0f + std::exp(-gate[i]));
-    }
-    return hostF32ToTensor(attn_flat_host, {seqlen, _meta.nh * _meta.dh}, _meta.dtype);
+tensor_t Model::applyFullAttentionGate(tensor_t attn_flat, tensor_t gate, size_t seqlen) const {
+    tensor_t gated = makeTensor({seqlen, _meta.nh * _meta.dh}, _meta.dtype);
+    ops::mul_sigmoid(gated, attn_flat, gate);
+    return gated;
 }
 
 tensor_t Model::runMLPBlock(tensor_t x, size_t layer_idx) const {

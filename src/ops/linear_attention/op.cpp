@@ -20,7 +20,7 @@ void linear_attention(
     tensor_t initial_state,
     tensor_t final_state) {
     CHECK_SAME_DEVICE(out, q, k, v, g, beta);
-    CHECK_SAME_DTYPE(out->dtype(), q->dtype(), k->dtype(), v->dtype(), g->dtype(), beta->dtype());
+    CHECK_SAME_DTYPE(out->dtype(), q->dtype(), k->dtype(), v->dtype());
     CHECK_ARGUMENT(out->ndim() == 3, "linear_attention: out must be 3D [seqlen, nhead, vdim]");
     CHECK_ARGUMENT(q->ndim() == 3 && k->ndim() == 3 && v->ndim() == 3, "linear_attention: q, k, v must be 3D");
     CHECK_ARGUMENT(g->ndim() == 2 && beta->ndim() == 2, "linear_attention: g and beta must be 2D [seqlen, nhead]");
@@ -35,13 +35,29 @@ void linear_attention(
                g->isContiguous() && beta->isContiguous(),
            "linear_attention: all input/output tensors must be contiguous");
 
+    auto is_supported_float_dtype = [](wginferDataType_t dtype) {
+        return dtype == WGINFER_DTYPE_F32 || dtype == WGINFER_DTYPE_F16 || dtype == WGINFER_DTYPE_BF16;
+    };
+    CHECK_ARGUMENT(is_supported_float_dtype(out->dtype()), "linear_attention: data dtype must be f32/f16/bf16");
+    CHECK_ARGUMENT(is_supported_float_dtype(g->dtype()), "linear_attention: g dtype must be f32/f16/bf16");
+    CHECK_ARGUMENT(is_supported_float_dtype(beta->dtype()), "linear_attention: beta dtype must be f32/f16/bf16");
+
+    wginferDataType_t state_dtype = out->dtype();
+    if (initial_state != nullptr) {
+        state_dtype = initial_state->dtype();
+    }
+    if (final_state != nullptr) {
+        state_dtype = final_state->dtype();
+    }
+    CHECK_ARGUMENT(is_supported_float_dtype(state_dtype), "linear_attention: state dtype must be f32/f16/bf16");
+
     if (initial_state != nullptr) {
         CHECK_SAME_DEVICE(out, initial_state);
         CHECK_ARGUMENT(initial_state->ndim() == 3, "linear_attention: initial_state must be 3D [nhead, kdim, vdim]");
         CHECK_ARGUMENT(initial_state->shape()[0] == q->shape()[1], "linear_attention: initial_state nhead mismatch");
         CHECK_ARGUMENT(initial_state->shape()[1] == q->shape()[2], "linear_attention: initial_state kdim mismatch");
         CHECK_ARGUMENT(initial_state->shape()[2] == v->shape()[2], "linear_attention: initial_state vdim mismatch");
-        CHECK_ARGUMENT(initial_state->dtype() == out->dtype(), "linear_attention: initial_state dtype mismatch");
+        CHECK_ARGUMENT(initial_state->dtype() == state_dtype, "linear_attention: initial_state dtype mismatch");
         ASSERT(initial_state->isContiguous(), "linear_attention: initial_state must be contiguous");
     }
 
@@ -51,7 +67,7 @@ void linear_attention(
         CHECK_ARGUMENT(final_state->shape()[0] == q->shape()[1], "linear_attention: final_state nhead mismatch");
         CHECK_ARGUMENT(final_state->shape()[1] == q->shape()[2], "linear_attention: final_state kdim mismatch");
         CHECK_ARGUMENT(final_state->shape()[2] == v->shape()[2], "linear_attention: final_state vdim mismatch");
-        CHECK_ARGUMENT(final_state->dtype() == out->dtype(), "linear_attention: final_state dtype mismatch");
+        CHECK_ARGUMENT(final_state->dtype() == state_dtype, "linear_attention: final_state dtype mismatch");
         ASSERT(final_state->isContiguous(), "linear_attention: final_state must be contiguous");
     }
 
@@ -69,6 +85,9 @@ void linear_attention(
             initial_state ? initial_state->data() : nullptr,
             final_state ? final_state->data() : nullptr,
             out->dtype(),
+            g->dtype(),
+            beta->dtype(),
+            state_dtype,
             out->shape()[0],
             out->shape()[1],
             q->shape()[2],
@@ -85,6 +104,9 @@ void linear_attention(
             initial_state ? initial_state->data() : nullptr,
             final_state ? final_state->data() : nullptr,
             out->dtype(),
+            g->dtype(),
+            beta->dtype(),
+            state_dtype,
             out->shape()[0],
             out->shape()[1],
             q->shape()[2],

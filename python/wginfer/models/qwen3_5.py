@@ -36,6 +36,52 @@ def is_qwen3_5_config(view: ModelConfigView) -> bool:
     return any(arch.startswith("Qwen3_5") for arch in view.architectures)
 
 
+def _qwen3_5_layer_types(text_config: dict[str, Any], nlayer: int) -> tuple[str, ...]:
+    layer_types_cfg = text_config.get("layer_types")
+    if isinstance(layer_types_cfg, list):
+        layer_types = tuple(str(x) for x in layer_types_cfg)
+    else:
+        interval = int(text_config.get("full_attention_interval", 4))
+        if interval <= 0:
+            raise UnsupportedModelConfigError(
+                "Qwen3.5 full_attention_interval must be positive when layer_types is omitted."
+            )
+        layer_types = tuple(
+            "linear_attention" if (i + 1) % interval else "full_attention"
+            for i in range(nlayer)
+        )
+
+    if len(layer_types) != nlayer:
+        raise UnsupportedModelConfigError(
+            f"Qwen3.5 layer_types length {len(layer_types)} does not match num_hidden_layers {nlayer}."
+        )
+
+    unsupported = sorted({x for x in layer_types if x not in {"linear_attention", "full_attention"}})
+    if unsupported:
+        raise UnsupportedModelConfigError(
+            f"Unsupported Qwen3.5 layer_types: {', '.join(unsupported)}."
+        )
+    return layer_types
+
+
+def _qwen3_5_end_token(text_config: dict[str, Any]) -> int:
+    eos = text_config.get("eos_token_id", -1)
+    if isinstance(eos, list):
+        return int(eos[0]) if eos else -1
+    if eos is None:
+        return -1
+    return int(eos)
+
+
+def _qwen3_5_partial_rotary_factor(text_config: dict[str, Any]) -> float:
+    rope_parameters = text_config.get("rope_parameters")
+    if isinstance(rope_parameters, dict) and "partial_rotary_factor" in rope_parameters:
+        return float(rope_parameters["partial_rotary_factor"])
+    if "partial_rotary_factor" in text_config:
+        return float(text_config["partial_rotary_factor"])
+    return 0.25
+
+
 @dataclass(frozen=True)
 class Qwen3_5LayerSpec:
     index: int
@@ -82,12 +128,12 @@ def parse_qwen3_5_text_meta(text_config: dict[str, Any]) -> Qwen3_5TextMeta:
     hs = int(text_config.get("hidden_size", 0))
     nh = int(text_config.get("num_attention_heads", 0))
     dh = int(text_config.get("head_dim", hs // nh if nh else 0))
-    layer_types_cfg = text_config.get("layer_types")
-    layer_types = tuple(str(x) for x in layer_types_cfg) if isinstance(layer_types_cfg, list) else ()
+    nlayer = int(text_config.get("num_hidden_layers", 0))
+    layer_types = _qwen3_5_layer_types(text_config, nlayer)
 
     return Qwen3_5TextMeta(
         dtype=DataType.BF16,
-        nlayer=int(text_config.get("num_hidden_layers", 0)),
+        nlayer=nlayer,
         hs=hs,
         nh=nh,
         nkvh=int(text_config.get("num_key_value_heads", nh)),
@@ -97,15 +143,15 @@ def parse_qwen3_5_text_meta(text_config: dict[str, Any]) -> Qwen3_5TextMeta:
         voc=int(text_config.get("vocab_size", 0)),
         epsilon=float(text_config.get("rms_norm_eps", 1e-6)),
         theta=rope_theta_from_text_config(text_config, 10_000_000.0),
-        end_token=int(text_config.get("eos_token_id", -1)),
+        end_token=_qwen3_5_end_token(text_config),
         tie_word_embeddings=bool(text_config.get("tie_word_embeddings", False)),
-        full_attention_interval=int(text_config.get("full_attention_interval", 0)),
+        full_attention_interval=int(text_config.get("full_attention_interval", 4)),
         linear_num_key_heads=int(text_config.get("linear_num_key_heads", 0)),
         linear_num_value_heads=int(text_config.get("linear_num_value_heads", 0)),
         linear_key_head_dim=int(text_config.get("linear_key_head_dim", 0)),
         linear_value_head_dim=int(text_config.get("linear_value_head_dim", 0)),
         linear_conv_kernel_dim=int(text_config.get("linear_conv_kernel_dim", 0)),
-        partial_rotary_factor=float(text_config.get("rope_parameters", {}).get("partial_rotary_factor", 1.0)),
+        partial_rotary_factor=_qwen3_5_partial_rotary_factor(text_config),
         layer_types=layer_types,
     )
 
@@ -448,11 +494,11 @@ class Qwen3_5:
                     loaded += 1
                     continue
                 if suffix == "self_attn.q_norm.weight":
-                    set_layer("full_attn_q_norm_w", layer_idx, tensor)
+                    set_layer("full_attn_q_norm_w", layer_idx, tensor, add_one=True)
                     loaded += 1
                     continue
                 if suffix == "self_attn.k_norm.weight":
-                    set_layer("full_attn_k_norm_w", layer_idx, tensor)
+                    set_layer("full_attn_k_norm_w", layer_idx, tensor, add_one=True)
                     loaded += 1
                     continue
 

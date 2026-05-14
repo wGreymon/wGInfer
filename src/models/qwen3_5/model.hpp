@@ -2,12 +2,16 @@
 
 #include "../../ops/add/op.hpp"
 #include "../../ops/argmax/op.hpp"
+#include "../../ops/causal_conv1d/op.hpp"
 #include "../../ops/embedding/op.hpp"
 #include "../../ops/gated_rms_norm/op.hpp"
 #include "../../ops/linear/op.hpp"
 #include "../../ops/linear_attention/op.hpp"
+#include "../../ops/linear_attn_gates/op.hpp"
+#include "../../ops/linear_attn_qkv/op.hpp"
 #include "../../ops/mul_sigmoid/op.hpp"
 #include "../../ops/rms_norm/op.hpp"
+#include "../../ops/rope_partial/op.hpp"
 #include "../../ops/self_attention/op.hpp"
 #include "../../ops/swiglu/op.hpp"
 #include "../../tensor/tensor.hpp"
@@ -98,12 +102,7 @@ struct FullProjectedTensors {
     tensor_t v_proj;
 };
 
-struct FullAttentionPreparedTensors {
-    tensor_t q;
-    tensor_t k;
-    tensor_t v;
-    std::vector<float> gate;
-};
+
 
 class Model {
 private:
@@ -117,13 +116,8 @@ private:
     std::vector<tensor_t> _full_k_cache;
     std::vector<tensor_t> _full_v_cache;
     std::vector<tensor_t> _linear_recurrent_state;
-    std::vector<std::vector<float>> _linear_qkv_history;
-
-    std::vector<std::vector<float>> _full_q_norm_host;
-    std::vector<std::vector<float>> _full_k_norm_host;
-    std::vector<std::vector<float>> _linear_a_log_host;
-    std::vector<std::vector<float>> _linear_dt_bias_host;
-    std::vector<std::vector<float>> _linear_conv_host;
+    std::vector<tensor_t> _linear_qkv_history_gpu;
+    std::vector<size_t> _linear_qkv_history_rows;
 
     tensor_t makeTensor(const std::vector<size_t> &shape, wginferDataType_t dtype) const;
     std::vector<float> tensorToHostF32(tensor_t tensor) const;
@@ -135,25 +129,17 @@ private:
     tensor_t runAttentionInputNorm(tensor_t x, size_t layer_idx) const;
     LinearProjectedTensors projectLinearAttentionInputs(tensor_t x_norm, size_t seqlen, size_t layer_idx) const;
     FullProjectedTensors projectFullAttentionInputs(tensor_t x_norm, size_t seqlen, size_t layer_idx) const;
-    FullAttentionPreparedTensors prepareFullAttentionInputsFromHost(
-        const std::vector<float> &q_proj_host,
-        const std::vector<float> &k_proj_host,
-        const std::vector<float> &v_proj_host,
-        size_t seqlen,
-        size_t layer_idx,
-        size_t start_pos) const;
-    LinearPreparedTensors prepareLinearInputsFromHost(
-        const std::vector<float> &mixed_qkv_host,
-        const std::vector<float> &z_host,
-        const std::vector<float> &a_host,
-        const std::vector<float> &b_host,
+    LinearPreparedTensors prepareLinearInputs(
+        tensor_t mixed_qkv,
+        tensor_t z,
+        tensor_t a,
+        tensor_t b,
         size_t seqlen,
         size_t layer_idx) const;
 
-    void cacheHostLayerWeight(size_t layer_idx, const std::string &name, tensor_t tensor);
     void appendToCache(tensor_t cache, tensor_t values, size_t start_pos) const;
     tensor_t finalLogitsFromHidden(tensor_t hidden, size_t seqlen) const;
-    tensor_t applyFullAttentionGate(tensor_t attn_flat, const std::vector<float> &gate, size_t seqlen) const;
+    tensor_t applyFullAttentionGate(tensor_t attn_flat, tensor_t gate, size_t seqlen) const;
     tensor_t runMLPBlock(tensor_t x, size_t layer_idx) const;
     tensor_t prefillDecoderLayer(tensor_t x, size_t layer_idx, size_t start_pos);
     tensor_t decodeDecoderLayer(tensor_t x, size_t layer_idx, size_t start_pos);
@@ -173,7 +159,7 @@ public:
         const std::vector<LayerType> &layer_types,
         wginferDeviceType_t device_type,
         int device_id);
-    ~Model() = default;
+    ~Model();
 
     Model(const Model &) = delete;
     Model &operator=(const Model &) = delete;

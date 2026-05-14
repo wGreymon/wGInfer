@@ -7,7 +7,35 @@
 
 namespace {
 
-template <typename T>
+float read_value(const std::byte *data, wginferDataType_t dtype, size_t idx) {
+    switch (dtype) {
+    case WGINFER_DTYPE_F32:
+        return reinterpret_cast<const float *>(data)[idx];
+    case WGINFER_DTYPE_F16:
+        return wginfer::utils::cast<float>(reinterpret_cast<const wginfer::fp16_t *>(data)[idx]);
+    case WGINFER_DTYPE_BF16:
+        return wginfer::utils::cast<float>(reinterpret_cast<const wginfer::bf16_t *>(data)[idx]);
+    default:
+        EXCEPTION_UNSUPPORTED_DATATYPE(dtype);
+    }
+}
+
+void write_value(std::byte *data, wginferDataType_t dtype, size_t idx, float value) {
+    switch (dtype) {
+    case WGINFER_DTYPE_F32:
+        reinterpret_cast<float *>(data)[idx] = value;
+        return;
+    case WGINFER_DTYPE_F16:
+        reinterpret_cast<wginfer::fp16_t *>(data)[idx] = wginfer::utils::cast<wginfer::fp16_t>(value);
+        return;
+    case WGINFER_DTYPE_BF16:
+        reinterpret_cast<wginfer::bf16_t *>(data)[idx] = wginfer::utils::cast<wginfer::bf16_t>(value);
+        return;
+    default:
+        EXCEPTION_UNSUPPORTED_DATATYPE(dtype);
+    }
+}
+
 void linear_attention_impl(
     std::byte *out,
     const std::byte *q,
@@ -17,23 +45,18 @@ void linear_attention_impl(
     const std::byte *beta,
     const std::byte *initial_state,
     std::byte *final_state,
+    wginferDataType_t data_dtype,
+    wginferDataType_t g_dtype,
+    wginferDataType_t beta_dtype,
+    wginferDataType_t state_dtype,
     size_t seqlen,
     size_t nhead,
     size_t kdim,
     size_t vdim) {
-    const T *q_t = reinterpret_cast<const T *>(q);
-    const T *k_t = reinterpret_cast<const T *>(k);
-    const T *v_t = reinterpret_cast<const T *>(v);
-    const T *g_t = reinterpret_cast<const T *>(g);
-    const T *beta_t = reinterpret_cast<const T *>(beta);
-    const T *initial_state_t = reinterpret_cast<const T *>(initial_state);
-    T *out_t = reinterpret_cast<T *>(out);
-    T *final_state_t = reinterpret_cast<T *>(final_state);
-
     std::vector<float> state(nhead * kdim * vdim, 0.0f);
-    if (initial_state_t != nullptr) {
+    if (initial_state != nullptr) {
         for (size_t idx = 0; idx < state.size(); ++idx) {
-            state[idx] = wginfer::utils::cast<float>(initial_state_t[idx]);
+            state[idx] = read_value(initial_state, state_dtype, idx);
         }
     }
 
@@ -49,8 +72,8 @@ void linear_attention_impl(
 
     for (size_t seq = 0; seq < seqlen; ++seq) {
         for (size_t head = 0; head < nhead; ++head) {
-            const float g_scale = std::exp(wginfer::utils::cast<float>(g_t[scalar_index(seq, head)]));
-            const float beta_scale = wginfer::utils::cast<float>(beta_t[scalar_index(seq, head)]);
+            const float g_scale = std::exp(read_value(g, g_dtype, scalar_index(seq, head)));
+            const float beta_scale = read_value(beta, beta_dtype, scalar_index(seq, head));
 
             for (size_t ki = 0; ki < kdim; ++ki) {
                 for (size_t vi = 0; vi < vdim; ++vi) {
@@ -64,14 +87,14 @@ void linear_attention_impl(
                 for (size_t ki = 0; ki < kdim; ++ki) {
                     kv_mem +=
                         state[state_index(head, ki, vi)] *
-                        wginfer::utils::cast<float>(k_t[qkv_index(seq, head, ki, kdim)]);
+                        read_value(k, data_dtype, qkv_index(seq, head, ki, kdim));
                 }
-                const float v_val = wginfer::utils::cast<float>(v_t[qkv_index(seq, head, vi, vdim)]);
+                const float v_val = read_value(v, data_dtype, qkv_index(seq, head, vi, vdim));
                 delta[vi] = (v_val - kv_mem) * beta_scale;
             }
 
             for (size_t ki = 0; ki < kdim; ++ki) {
-                const float k_val = wginfer::utils::cast<float>(k_t[qkv_index(seq, head, ki, kdim)]);
+                const float k_val = read_value(k, data_dtype, qkv_index(seq, head, ki, kdim));
                 for (size_t vi = 0; vi < vdim; ++vi) {
                     state[state_index(head, ki, vi)] += k_val * delta[vi];
                 }
@@ -82,16 +105,16 @@ void linear_attention_impl(
                 for (size_t ki = 0; ki < kdim; ++ki) {
                     acc +=
                         state[state_index(head, ki, vi)] *
-                        wginfer::utils::cast<float>(q_t[qkv_index(seq, head, ki, kdim)]);
+                        read_value(q, data_dtype, qkv_index(seq, head, ki, kdim));
                 }
-                out_t[qkv_index(seq, head, vi, vdim)] = wginfer::utils::cast<T>(acc);
+                write_value(out, data_dtype, qkv_index(seq, head, vi, vdim), acc);
             }
         }
     }
 
-    if (final_state_t != nullptr) {
+    if (final_state != nullptr) {
         for (size_t idx = 0; idx < state.size(); ++idx) {
-            final_state_t[idx] = wginfer::utils::cast<T>(state[idx]);
+            write_value(final_state, state_dtype, idx, state[idx]);
         }
     }
 }
@@ -109,21 +132,15 @@ void linear_attention(
     const std::byte *beta,
     const std::byte *initial_state,
     std::byte *final_state,
-    wginferDataType_t dtype,
+    wginferDataType_t data_dtype,
+    wginferDataType_t g_dtype,
+    wginferDataType_t beta_dtype,
+    wginferDataType_t state_dtype,
     size_t seqlen,
     size_t nhead,
     size_t kdim,
     size_t vdim) {
-    switch (dtype) {
-    case WGINFER_DTYPE_F32:
-        return linear_attention_impl<float>(out, q, k, v, g, beta, initial_state, final_state, seqlen, nhead, kdim, vdim);
-    case WGINFER_DTYPE_F16:
-        return linear_attention_impl<wginfer::fp16_t>(out, q, k, v, g, beta, initial_state, final_state, seqlen, nhead, kdim, vdim);
-    case WGINFER_DTYPE_BF16:
-        return linear_attention_impl<wginfer::bf16_t>(out, q, k, v, g, beta, initial_state, final_state, seqlen, nhead, kdim, vdim);
-    default:
-        EXCEPTION_UNSUPPORTED_DATATYPE(dtype);
-    }
+    return linear_attention_impl(out, q, k, v, g, beta, initial_state, final_state, data_dtype, g_dtype, beta_dtype, state_dtype, seqlen, nhead, kdim, vdim);
 }
 
 } // namespace wginfer::ops::cpu

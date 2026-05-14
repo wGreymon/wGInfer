@@ -12,7 +12,19 @@ namespace wginfer::ops {
 
 void linear_attn_gates(tensor_t out_g, tensor_t out_beta, tensor_t a, tensor_t b, tensor_t a_log, tensor_t dt_bias) {
     CHECK_SAME_DEVICE(out_g, out_beta, a, b, a_log, dt_bias);
-    CHECK_SAME_DTYPE(out_g->dtype(), out_beta->dtype(), a->dtype(), b->dtype(), a_log->dtype(), dt_bias->dtype());
+    CHECK_ARGUMENT(out_g->dtype() == out_beta->dtype(), "linear_attn_gates: out_g/out_beta dtype mismatch");
+    CHECK_ARGUMENT(a->dtype() == b->dtype(), "linear_attn_gates: a/b dtype mismatch");
+    auto is_supported_param_dtype = [](wginferDataType_t dtype) {
+        return dtype == WGINFER_DTYPE_F32 || dtype == WGINFER_DTYPE_F16 || dtype == WGINFER_DTYPE_BF16;
+    };
+    CHECK_ARGUMENT(is_supported_param_dtype(out_g->dtype()),
+                   "linear_attn_gates: output dtype must be f32/f16/bf16");
+    CHECK_ARGUMENT(is_supported_param_dtype(a->dtype()),
+                   "linear_attn_gates: input dtype must be f32/f16/bf16");
+    CHECK_ARGUMENT(is_supported_param_dtype(a_log->dtype()),
+                   "linear_attn_gates: a_log dtype must be f32/f16/bf16");
+    CHECK_ARGUMENT(is_supported_param_dtype(dt_bias->dtype()),
+                   "linear_attn_gates: dt_bias dtype must be f32/f16/bf16");
     CHECK_ARGUMENT(out_g->ndim() == 2 && out_beta->ndim() == 2 && a->ndim() == 2 && b->ndim() == 2,
                    "linear_attn_gates: out_g/out_beta/a/b must be 2D");
     CHECK_ARGUMENT(a_log->ndim() == 1 && dt_bias->ndim() == 1,
@@ -28,10 +40,34 @@ void linear_attn_gates(tensor_t out_g, tensor_t out_beta, tensor_t a, tensor_t b
 
     switch (out_g->deviceType()) {
     case WGINFER_DEVICE_CPU:
-        return cpu::linear_attn_gates(out_g->data(), out_beta->data(), a->data(), b->data(), a_log->data(), dt_bias->data(), out_g->dtype(), out_g->shape()[0], out_g->shape()[1]);
+        return cpu::linear_attn_gates(
+            out_g->data(),
+            out_beta->data(),
+            a->data(),
+            b->data(),
+            a_log->data(),
+            dt_bias->data(),
+            out_g->dtype(),
+            a->dtype(),
+            a_log->dtype(),
+            dt_bias->dtype(),
+            out_g->shape()[0],
+            out_g->shape()[1]);
 #ifdef ENABLE_NVIDIA_API
     case WGINFER_DEVICE_NVIDIA:
-        return nvidia::linear_attn_gates(out_g->data(), out_beta->data(), a->data(), b->data(), a_log->data(), dt_bias->data(), out_g->dtype(), out_g->shape()[0], out_g->shape()[1]);
+        return nvidia::linear_attn_gates(
+            out_g->data(),
+            out_beta->data(),
+            a->data(),
+            b->data(),
+            a_log->data(),
+            dt_bias->data(),
+            out_g->dtype(),
+            a->dtype(),
+            a_log->dtype(),
+            dt_bias->dtype(),
+            out_g->shape()[0],
+            out_g->shape()[1]);
 #endif
     default:
         EXCEPTION_UNSUPPORTED_DEVICE;

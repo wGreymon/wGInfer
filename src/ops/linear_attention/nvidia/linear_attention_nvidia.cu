@@ -7,16 +7,31 @@
 
 namespace {
 
-template <typename T>
+__device__ __forceinline__ float read_value(const std::byte *data, wginferDataType_t dtype, size_t idx) {
+    switch (dtype) {
+    case WGINFER_DTYPE_F32:
+        return reinterpret_cast<const float *>(data)[idx];
+    case WGINFER_DTYPE_F16:
+        return __half2float(reinterpret_cast<const half *>(data)[idx]);
+    case WGINFER_DTYPE_BF16:
+        return __bfloat162float(reinterpret_cast<const __nv_bfloat16 *>(data)[idx]);
+    default:
+        return 0.0f;
+    }
+}
+
+template <typename DataT, typename StateT>
 __global__ void linear_attention_kernel(
-    T *out,
-    const T *q,
-    const T *k,
-    const T *v,
-    const T *g,
-    const T *beta,
-    const T *initial_state,
-    T *state,
+    DataT *out,
+    const DataT *q,
+    const DataT *k,
+    const DataT *v,
+    const std::byte *g,
+    const std::byte *beta,
+    wginferDataType_t g_dtype,
+    wginferDataType_t beta_dtype,
+    const StateT *initial_state,
+    StateT *state,
     size_t seqlen,
     size_t nhead,
     size_t kdim,
@@ -27,22 +42,22 @@ __global__ void linear_attention_kernel(
     }
 
     const size_t state_elems_per_head = kdim * vdim;
-    T *state_head = state + head * state_elems_per_head;
-    const T *initial_state_head = initial_state ? (initial_state + head * state_elems_per_head) : nullptr;
+    StateT *state_head = state + head * state_elems_per_head;
+    const StateT *initial_state_head = initial_state ? (initial_state + head * state_elems_per_head) : nullptr;
 
     for (size_t idx = 0; idx < state_elems_per_head; ++idx) {
-        state_head[idx] = initial_state_head ? initial_state_head[idx] : from_float<T>(0.0f);
+        state_head[idx] = initial_state_head ? initial_state_head[idx] : from_float<StateT>(0.0f);
     }
 
     for (size_t seq = 0; seq < seqlen; ++seq) {
         const size_t scalar_offset = seq * nhead + head;
-        const float g_scale = expf(to_float(g[scalar_offset]));
-        const float beta_scale = to_float(beta[scalar_offset]);
+        const float g_scale = expf(read_value(g, g_dtype, scalar_offset));
+        const float beta_scale = read_value(beta, beta_dtype, scalar_offset);
 
         for (size_t ki = 0; ki < kdim; ++ki) {
             for (size_t vi = 0; vi < vdim; ++vi) {
                 const size_t idx = ki * vdim + vi;
-                state_head[idx] = from_float<T>(to_float(state_head[idx]) * g_scale);
+                state_head[idx] = from_float<StateT>(to_float(state_head[idx]) * g_scale);
             }
         }
 
@@ -60,7 +75,7 @@ __global__ void linear_attention_kernel(
                 const size_t idx = ki * vdim + vi;
                 const size_t qk_offset = (seq * nhead + head) * kdim + ki;
                 const float updated = to_float(state_head[idx]) + to_float(k[qk_offset]) * delta;
-                state_head[idx] = from_float<T>(updated);
+                state_head[idx] = from_float<StateT>(updated);
             }
         }
 
@@ -72,12 +87,12 @@ __global__ void linear_attention_kernel(
                 acc += to_float(state_head[state_idx]) * to_float(q[q_offset]);
             }
             const size_t out_offset = (seq * nhead + head) * vdim + vi;
-            out[out_offset] = from_float<T>(acc);
+            out[out_offset] = from_float<DataT>(acc);
         }
     }
 }
 
-template <typename T>
+template <typename DataT, typename StateT>
 void launch_linear_attention(
     std::byte *out,
     const std::byte *q,
@@ -87,26 +102,30 @@ void launch_linear_attention(
     const std::byte *beta,
     const std::byte *initial_state,
     std::byte *final_state,
+    wginferDataType_t g_dtype,
+    wginferDataType_t beta_dtype,
     size_t seqlen,
     size_t nhead,
     size_t kdim,
     size_t vdim) {
-    const size_t state_bytes = nhead * kdim * vdim * sizeof(T);
-    T *state_buffer = reinterpret_cast<T *>(final_state);
+    const size_t state_bytes = nhead * kdim * vdim * sizeof(StateT);
+    StateT *state_buffer = reinterpret_cast<StateT *>(final_state);
     bool owns_state_buffer = false;
     if (state_buffer == nullptr) {
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&state_buffer), state_bytes));
         owns_state_buffer = true;
     }
 
-    linear_attention_kernel<T><<<static_cast<unsigned int>(nhead), 1>>>(
-        reinterpret_cast<T *>(out),
-        reinterpret_cast<const T *>(q),
-        reinterpret_cast<const T *>(k),
-        reinterpret_cast<const T *>(v),
-        reinterpret_cast<const T *>(g),
-        reinterpret_cast<const T *>(beta),
-        reinterpret_cast<const T *>(initial_state),
+    linear_attention_kernel<DataT, StateT><<<static_cast<unsigned int>(nhead), 1>>>(
+        reinterpret_cast<DataT *>(out),
+        reinterpret_cast<const DataT *>(q),
+        reinterpret_cast<const DataT *>(k),
+        reinterpret_cast<const DataT *>(v),
+        g,
+        beta,
+        g_dtype,
+        beta_dtype,
+        reinterpret_cast<const StateT *>(initial_state),
         state_buffer,
         seqlen,
         nhead,
@@ -116,6 +135,35 @@ void launch_linear_attention(
 
     if (owns_state_buffer) {
         CUDA_CHECK(cudaFree(state_buffer));
+    }
+}
+
+template <typename DataT>
+void dispatch_state_dtype(
+    std::byte *out,
+    const std::byte *q,
+    const std::byte *k,
+    const std::byte *v,
+    const std::byte *g,
+    const std::byte *beta,
+    const std::byte *initial_state,
+    std::byte *final_state,
+    wginferDataType_t g_dtype,
+    wginferDataType_t beta_dtype,
+    wginferDataType_t state_dtype,
+    size_t seqlen,
+    size_t nhead,
+    size_t kdim,
+    size_t vdim) {
+    switch (state_dtype) {
+    case WGINFER_DTYPE_F32:
+        return launch_linear_attention<DataT, float>(out, q, k, v, g, beta, initial_state, final_state, g_dtype, beta_dtype, seqlen, nhead, kdim, vdim);
+    case WGINFER_DTYPE_F16:
+        return launch_linear_attention<DataT, half>(out, q, k, v, g, beta, initial_state, final_state, g_dtype, beta_dtype, seqlen, nhead, kdim, vdim);
+    case WGINFER_DTYPE_BF16:
+        return launch_linear_attention<DataT, __nv_bfloat16>(out, q, k, v, g, beta, initial_state, final_state, g_dtype, beta_dtype, seqlen, nhead, kdim, vdim);
+    default:
+        EXCEPTION_UNSUPPORTED_DATATYPE(state_dtype);
     }
 }
 
@@ -132,7 +180,10 @@ void linear_attention(
     const std::byte *beta,
     const std::byte *initial_state,
     std::byte *final_state,
-    wginferDataType_t dtype,
+    wginferDataType_t data_dtype,
+    wginferDataType_t g_dtype,
+    wginferDataType_t beta_dtype,
+    wginferDataType_t state_dtype,
     size_t seqlen,
     size_t nhead,
     size_t kdim,
@@ -141,18 +192,15 @@ void linear_attention(
         return;
     }
 
-    switch (dtype) {
+    switch (data_dtype) {
     case WGINFER_DTYPE_F32:
-        launch_linear_attention<float>(out, q, k, v, g, beta, initial_state, final_state, seqlen, nhead, kdim, vdim);
-        break;
+        return dispatch_state_dtype<float>(out, q, k, v, g, beta, initial_state, final_state, g_dtype, beta_dtype, state_dtype, seqlen, nhead, kdim, vdim);
     case WGINFER_DTYPE_F16:
-        launch_linear_attention<half>(out, q, k, v, g, beta, initial_state, final_state, seqlen, nhead, kdim, vdim);
-        break;
+        return dispatch_state_dtype<half>(out, q, k, v, g, beta, initial_state, final_state, g_dtype, beta_dtype, state_dtype, seqlen, nhead, kdim, vdim);
     case WGINFER_DTYPE_BF16:
-        launch_linear_attention<__nv_bfloat16>(out, q, k, v, g, beta, initial_state, final_state, seqlen, nhead, kdim, vdim);
-        break;
+        return dispatch_state_dtype<__nv_bfloat16>(out, q, k, v, g, beta, initial_state, final_state, g_dtype, beta_dtype, state_dtype, seqlen, nhead, kdim, vdim);
     default:
-        EXCEPTION_UNSUPPORTED_DATATYPE(dtype);
+        EXCEPTION_UNSUPPORTED_DATATYPE(data_dtype);
     }
 }
 
